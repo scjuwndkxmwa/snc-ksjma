@@ -1,0 +1,157 @@
+import subprocess
+import time
+import signal
+import sys
+
+TIKTOK_URL = "https://www.tiktok.com/@yousry.yakout/live"
+YOUTUBE_RTMP = "rtmp://a.rtmp.youtube.com/live2/3qre-y6az-yjtu-r9js-5e3g"
+
+STREAMLINK_CMD = [
+    "streamlink",
+    "--hls-live-edge", "2",
+    "--ringbuffer-size", "512M",
+    "--retry-streams", "10",
+    "--retry-max", "0",
+    "--stream-segment-attempts", "10",
+    "--stream-segment-timeout", "30",
+    "--stream-timeout", "60",
+    "--stdout",
+    TIKTOK_URL,
+    "best"
+]
+
+FFMPEG_CMD = [
+    "ffmpeg",
+    "-hide_banner",
+    "-loglevel", "warning",
+    "-stats",
+
+    "-fflags", "+genpts+discardcorrupt",
+    "-err_detect", "ignore_err",
+
+    "-thread_queue_size", "1024",
+    "-i", "-",
+
+    # Video: copy without re-encoding
+    "-map", "0:v:0",
+    "-c:v", "copy",
+
+    # Audio
+    "-map", "0:a:0?",
+    "-c:a", "aac",
+    "-b:a", "128k",
+    "-ar", "44100",
+    "-ac", "2",
+    "-af", "aresample=async=1000:min_hard_comp=0.100000:first_pts=0",
+
+    # Output
+    "-f", "flv",
+    YOUTUBE_RTMP
+]
+
+
+streamlink_process = None
+ffmpeg_process = None
+
+
+def cleanup():
+    global streamlink_process, ffmpeg_process
+
+    print("\nStopping processes...")
+
+    if ffmpeg_process and ffmpeg_process.poll() is None:
+        try:
+            ffmpeg_process.terminate()
+            ffmpeg_process.wait(timeout=5)
+        except:
+            try:
+                ffmpeg_process.kill()
+            except:
+                pass
+
+    if streamlink_process and streamlink_process.poll() is None:
+        try:
+            streamlink_process.terminate()
+            streamlink_process.wait(timeout=5)
+        except:
+            try:
+                streamlink_process.kill()
+            except:
+                pass
+
+    streamlink_process = None
+    ffmpeg_process = None
+
+
+def signal_handler(sig, frame):
+    print("\nStopped by user.")
+    cleanup()
+    sys.exit(0)
+
+
+signal.signal(signal.SIGINT, signal_handler)
+signal.signal(signal.SIGTERM, signal_handler)
+
+
+while True:
+    try:
+        print("\n========================================")
+        print("Starting TikTok -> YouTube stream...")
+        print("Quality: BEST / ORIGIN")
+        print("Video: COPY (NO RE-ENCODE)")
+        print("Crop: OFF")
+        print("Resize: OFF")
+        print("========================================\n")
+
+        streamlink_process = subprocess.Popen(
+            STREAMLINK_CMD,
+            stdout=subprocess.PIPE,
+            stderr=None,
+            bufsize=0
+        )
+
+        ffmpeg_process = subprocess.Popen(
+            FFMPEG_CMD,
+            stdin=streamlink_process.stdout,
+            stdout=None,
+            stderr=None,
+            bufsize=0
+        )
+
+        streamlink_process.stdout.close()
+
+        ffmpeg_return = ffmpeg_process.wait()
+
+        if streamlink_process.poll() is None:
+            try:
+                streamlink_process.terminate()
+                streamlink_process.wait(timeout=5)
+            except:
+                try:
+                    streamlink_process.kill()
+                except:
+                    pass
+
+        streamlink_return = streamlink_process.poll()
+
+        print("\n========================================")
+        print("Stream stopped.")
+        print(f"FFmpeg exit code: {ffmpeg_return}")
+        print(f"Streamlink exit code: {streamlink_return}")
+        print("Reconnecting in 3 seconds...")
+        print("========================================\n")
+
+        streamlink_process = None
+        ffmpeg_process = None
+
+        time.sleep(3)
+
+    except KeyboardInterrupt:
+        cleanup()
+        break
+
+    except Exception as e:
+        print(f"\nError: {e}")
+        cleanup()
+        print("Restarting in 3 seconds...")
+        time.sleep(3)
