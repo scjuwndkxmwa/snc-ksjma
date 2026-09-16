@@ -10,7 +10,6 @@ STREAMLINK_CMD = [
     "streamlink",
     "--hls-live-edge", "2",
     "--ringbuffer-size", "512M",
-    "--http-cookies-file", "cookies.txt",
     "--retry-streams", "10",
     "--retry-max", "0",
     "--stream-segment-attempts", "10",
@@ -33,11 +32,9 @@ FFMPEG_CMD = [
     "-thread_queue_size", "1024",
     "-i", "-",
 
-    # Video: copy without re-encoding
     "-map", "0:v:0",
     "-c:v", "copy",
 
-    # Audio
     "-map", "0:a:0?",
     "-c:a", "aac",
     "-b:a", "128k",
@@ -45,7 +42,6 @@ FFMPEG_CMD = [
     "-ac", "2",
     "-af", "aresample=async=1000:min_hard_comp=0.100000:first_pts=0",
 
-    # Output
     "-f", "flv",
     YOUTUBE_RTMP
 ]
@@ -123,29 +119,24 @@ while True:
 
         ffmpeg_return = ffmpeg_process.wait()
 
-        if streamlink_process.poll() is None:
+        if streamlink_process and streamlink_process.poll() is None:
             try:
                 streamlink_process.terminate()
-                streamlink_process.wait(timeout=5)
+                streamlink_process.wait(timeout=3)
             except:
                 try:
                     streamlink_process.kill()
                 except:
                     pass
 
-        streamlink_return = streamlink_process.poll()
+        streamlink_return = streamlink_process.poll() if streamlink_process else "N/A"
 
         print("\n========================================")
         print("Stream stopped.")
         print(f"FFmpeg exit code: {ffmpeg_return}")
         print(f"Streamlink exit code: {streamlink_return}")
-        print("Reconnecting in 3 seconds...")
+        print("Reconnecting immediately in 1 second...")
         print("========================================\n")
-
-        streamlink_process = None
-        ffmpeg_process = None
-
-        time.sleep(3)
 
     except KeyboardInterrupt:
         cleanup()
@@ -153,6 +144,8 @@ while True:
 
     except Exception as e:
         print(f"\nError: {e}")
+
+    finally:
         cleanup()
-        print("Restarting in 3 seconds...")
-        time.sleep(3)
+
+    time.sleep(1)
