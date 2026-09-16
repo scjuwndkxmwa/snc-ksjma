@@ -4,7 +4,7 @@ import signal
 import sys
 
 TIKTOK_URL = "https://www.tiktok.com/@memodawoud/live"
-YOUTUBE_RTMP = "rtmp://a.rtmp.youtube.com/live2/pqj2-5efp-ttd4-xhtg-c1yp"
+YOUTUBE_RTMP = "rtmp://a.rtmp.youtube.com/live2/r15q-vy52-schm-6048-4v98"
 
 STREAMLINK_CMD = [
     "streamlink",
