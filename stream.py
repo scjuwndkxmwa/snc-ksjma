@@ -3,8 +3,8 @@ import time
 import signal
 import sys
 
-TIKTOK_URL = "https://www.tiktok.com/@memodawoud/live"
-YOUTUBE_RTMP = "rtmp://a.rtmp.youtube.com/live2/r15q-vy52-schm-6048-4v98"
+TIKTOK_URL = "https://www.tiktok.com/@.31342257/live"
+YOUTUBE_RTMP = "rtmp://a.rtmp.youtube.com/live2/4vm5-3h9h-1t7u-a7aa-0e57"
 
 STREAMLINK_CMD = [
     "streamlink",
