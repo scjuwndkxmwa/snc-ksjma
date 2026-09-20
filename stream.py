@@ -9,25 +9,22 @@ TIKTOK_URL = "https://www.tiktok.com/@.31342257/live"
 
 YOUTUBE_RTMP = "rtmp://a.rtmp.youtube.com/live2/8yjs-eb3y-wt8s-y45e-ezsu"
 
-# Set to False to FORCE audio re-encoding via AAC & aresample.
-# This prevents audio drops/stuttering when TikTok audio timestamps drift.
+# Force audio re-encoding with aggressive sync filtering
 COPY_AUDIO = False
 
-# If ffmpeg produces no progress output for this many seconds while
-# "running", we assume the pipeline is frozen (network stall, RTMP
-# handshake hang, etc.) and force a restart instead of waiting forever.
 STALL_TIMEOUT = 25
 WATCHDOG_INTERVAL = 5
 
 STREAMLINK_CMD = [
     "streamlink",
-    "--hls-live-edge", "3",
+    "--hls-live-edge", "2",
+    "--hls-segment-threads", "3",
     "--ringbuffer-size", "512M",
-    "--retry-streams", "10",
+    "--retry-streams", "5",
     "--retry-max", "0",
     "--stream-segment-attempts", "10",
-    "--stream-segment-timeout", "30",
-    "--stream-timeout", "60",
+    "--stream-segment-timeout", "15",
+    "--stream-timeout", "30",
     "--stdout",
     TIKTOK_URL,
     "best"
@@ -42,15 +39,11 @@ def build_ffmpeg_cmd(copy_audio: bool):
         "-stats",
         "-nostdin",
 
-        # Rebuild timestamps from wall-clock arrival time instead of trusting
-        # the source's own PTS/DTS. Main fix for non-monotonic DTS jumps
-        # caused by TikTok segment hiccups/reconnects while video is copied.
-        "-use_wallclock_as_timestamps", "1",
-        "-fflags", "+genpts+discardcorrupt+igndts",
+        # Optimized sync flags for streaming stability
+        "-fflags", "+genpts+discardcorrupt+nobuffer",
         "-err_detect", "ignore_err",
-        "-avoid_negative_ts", "make_zero",
 
-        "-thread_queue_size", "4096",
+        "-thread_queue_size", "8192",
         "-i", "-",
 
         "-map", "0:v:0",
@@ -62,19 +55,19 @@ def build_ffmpeg_cmd(copy_audio: bool):
     if copy_audio:
         cmd += ["-c:a", "copy"]
     else:
-        # Audio re-encoding parameters for smooth sync and zero dropouts
+        # Aggressive aresample async threshold to fix audio freezing & stuttering
         cmd += [
             "-c:a", "aac",
             "-b:a", "128k",
             "-ar", "44100",
             "-ac", "2",
-            "-af", "aresample=async=1000:min_hard_comp=0.100000:first_pts=0",
+            "-af", "aresample=async=10000:min_hard_comp=0.010000:first_pts=0",
         ]
 
     cmd += [
         "-fps_mode", "passthrough",
         "-flush_packets", "1",
-        "-max_interleave_delta", "0",
+        "-max_interleave_delta", "100000",
 
         "-flvflags", "no_duration_filesize",
 
@@ -121,7 +114,7 @@ def watchdog(proc):
     """Force-restart if ffmpeg stops producing output while still running."""
     while not _watchdog_stop.is_set():
         if proc.poll() is not None:
-            return  # process already exited, main loop will handle it
+            return
         if _seconds_since_progress() > STALL_TIMEOUT:
             print(
                 f"\nNo progress for over {STALL_TIMEOUT}s — pipeline looks "
@@ -178,7 +171,7 @@ while True:
         print("Starting TikTok -> YouTube stream...")
         print("Quality: BEST")
         print("Video: COPY (NO RE-ENCODE)")
-        print("Audio: AAC RE-ENCODE (STABLE AUDIO ENFORCED)")
+        print("Audio: AAC RE-ENCODE (AGGRESSIVE ASYNC SYNC FIXED)")
         print(f"Stall watchdog: {STALL_TIMEOUT}s")
         print("========================================\n")
 
@@ -232,7 +225,7 @@ while True:
         print(f"Restarting in {restart_delay} second(s)...")
         print("========================================\n")
 
-        restart_delay = 1  # reset after a run that produced output
+        restart_delay = 1
 
     except KeyboardInterrupt:
         _watchdog_stop.set()
