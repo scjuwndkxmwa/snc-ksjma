@@ -4,7 +4,7 @@ import time
 import signal
 import sys
 
-TIKTOK_URL = "https://www.tiktok.com/@fakhr_eddine_1/live"
+TIKTOK_URL = "https://www.tiktok.com/@zainkairalah.8/live"
 
 YOUTUBE_STREAM_KEY = "4xb3-k76j-vbhz-4drr-422v"
 
