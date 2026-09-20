@@ -6,7 +6,7 @@ import sys
 
 TIKTOK_URL = "https://www.tiktok.com/@zainkairalah.8/live"
 
-YOUTUBE_STREAM_KEY = "4xb3-k76j-vbhz-4drr-422v"
+YOUTUBE_STREAM_KEY = "8yjs-eb3y-wt8s-y45e-ezsu"
 
 YOUTUBE_RTMP = f"rtmp://a.rtmp.youtube.com/live2/{YOUTUBE_STREAM_KEY}"
 
