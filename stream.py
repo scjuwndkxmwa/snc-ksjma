@@ -9,21 +9,15 @@ TIKTOK_URL = "https://www.tiktok.com/@.31342257/live"
 
 YOUTUBE_RTMP = "rtmp://a.rtmp.youtube.com/live2/8yjs-eb3y-wt8s-y45e-ezsu"
 
-# True = copy audio as-is (almost zero CPU cost). Only switches to
-# re-encoding automatically if copy proves incompatible.
-COPY_AUDIO = True
+# Set to False to FORCE audio re-encoding via AAC & aresample.
+# This prevents audio drops/stuttering when TikTok audio timestamps drift.
+COPY_AUDIO = False
 
 # If ffmpeg produces no progress output for this many seconds while
 # "running", we assume the pipeline is frozen (network stall, RTMP
 # handshake hang, etc.) and force a restart instead of waiting forever.
 STALL_TIMEOUT = 25
 WATCHDOG_INTERVAL = 5
-
-# Default queue is small; if audio processing lags behind video copy
-# even briefly, ffmpeg can hit this limit and hard-exit with
-# "Too many packets buffered for output stream" -- a real, silent
-# crash cause distinct from a normal network disconnect.
-MAX_MUXING_QUEUE_SIZE = 4096
 
 STREAMLINK_CMD = [
     "streamlink",
@@ -48,11 +42,6 @@ def build_ffmpeg_cmd(copy_audio: bool):
         "-stats",
         "-nostdin",
 
-        # Force single-thread scheduling: on CPU-quota-limited
-        # containers, multi-threaded encode/decode can actually perform
-        # *worse* due to thread scheduling fighting the cgroup CPU quota.
-        "-threads", "1",
-
         # Rebuild timestamps from wall-clock arrival time instead of trusting
         # the source's own PTS/DTS. Main fix for non-monotonic DTS jumps
         # caused by TikTok segment hiccups/reconnects while video is copied.
@@ -71,13 +60,9 @@ def build_ffmpeg_cmd(copy_audio: bool):
     ]
 
     if copy_audio:
-        # TikTok's live audio arrives packaged as MPEG-TS/ADTS AAC.
-        # FLV (YouTube's ingest container) expects AAC without ADTS
-        # framing. Copying without this filter causes exactly
-        # intermittent/garbled audio -- often WITHOUT ffmpeg crashing,
-        # so it will not always trigger the auto-fallback below.
-        cmd += ["-c:a", "copy", "-bsf:a", "aac_adtstoasc"]
+        cmd += ["-c:a", "copy"]
     else:
+        # Audio re-encoding parameters for smooth sync and zero dropouts
         cmd += [
             "-c:a", "aac",
             "-b:a", "128k",
@@ -91,7 +76,6 @@ def build_ffmpeg_cmd(copy_audio: bool):
         "-flush_packets", "1",
         "-max_interleave_delta", "0",
 
-        "-max_muxing_queue_size", str(MAX_MUXING_QUEUE_SIZE),
         "-flvflags", "no_duration_filesize",
 
         "-f", "flv",
@@ -185,18 +169,16 @@ signal.signal(signal.SIGINT, signal_handler)
 signal.signal(signal.SIGTERM, signal_handler)
 
 restart_delay = 1
-audio_copy_failed = False
 
 while True:
     try:
-        use_copy_audio = COPY_AUDIO and not audio_copy_failed
-        ffmpeg_cmd = build_ffmpeg_cmd(use_copy_audio)
+        ffmpeg_cmd = build_ffmpeg_cmd(COPY_AUDIO)
 
         print("\n========================================")
         print("Starting TikTok -> YouTube stream...")
         print("Quality: BEST")
         print("Video: COPY (NO RE-ENCODE)")
-        print(f"Audio: {'COPY (NO RE-ENCODE)' if use_copy_audio else 'AAC RE-ENCODE'}")
+        print("Audio: AAC RE-ENCODE (STABLE AUDIO ENFORCED)")
         print(f"Stall watchdog: {STALL_TIMEOUT}s")
         print("========================================\n")
 
@@ -246,10 +228,6 @@ while True:
         print("Stream stopped.")
         print(f"FFmpeg exit code: {ffmpeg_return}")
         print(f"Streamlink exit code: {streamlink_return}")
-
-        if use_copy_audio and ffmpeg_return not in (0, None) and not audio_copy_failed:
-            print("Audio copy may have failed — falling back to AAC re-encode.")
-            audio_copy_failed = True
 
         print(f"Restarting in {restart_delay} second(s)...")
         print("========================================\n")
