@@ -9,6 +9,7 @@ TIKTOK_URL = "https://www.tiktok.com/@.31342257/live"
 
 YOUTUBE_RTMP = "rtmp://a.rtmp.youtube.com/live2/8yjs-eb3y-wt8s-y45e-ezsu"
 
+# Force False to prevent TikTok timestamps drift from ruining audio sync
 COPY_AUDIO = False
 
 STALL_TIMEOUT = 25
@@ -17,7 +18,7 @@ MAX_MUXING_QUEUE_SIZE = 4096
 
 STREAMLINK_CMD = [
     "streamlink",
-    "--hls-live-edge", "3",
+    "--hls-live-edge", "2",
     "--ringbuffer-size", "512M",
     "--retry-streams", "10",
     "--retry-max", "0",
@@ -40,15 +41,12 @@ def build_ffmpeg_cmd(copy_audio: bool):
 
         "-threads", "1",
 
-        # Rebuild timestamps from wall-clock arrival time -- the actual fix
-        # for the non-monotonic DTS jumps from TikTok segment hiccups.
-        # (+nobuffer does NOT fix this -- it only reduces latency.)
-        "-use_wallclock_as_timestamps", "1",
-        "-fflags", "+genpts+discardcorrupt+igndts",
+        # Audio & Timestamp parameters matching your target code
+        "-dts_delta_threshold", "1",
+        "-fflags", "+genpts+discardcorrupt",
         "-err_detect", "ignore_err",
-        "-avoid_negative_ts", "make_zero",
 
-        "-thread_queue_size", "4096",
+        "-thread_queue_size", "1024",
         "-i", "-",
 
         "-map", "0:v:0",
@@ -60,22 +58,18 @@ def build_ffmpeg_cmd(copy_audio: bool):
     if copy_audio:
         cmd += ["-c:a", "copy", "-bsf:a", "aac_adtstoasc"]
     else:
+        # Audio configuration matching your target settings exactly
         cmd += [
             "-c:a", "aac",
-            "-aac_coder", "fast",
             "-b:a", "128k",
             "-ar", "44100",
             "-ac", "2",
-            # Moderate tolerance: aggressive values (async=10000,
-            # min_hard_comp=0.01) force a hard resync on every ~10ms of
-            # drift, which sounds like constant audio cutting/skipping.
             "-af", "aresample=async=1000:min_hard_comp=0.100000:first_pts=0",
         ]
 
     cmd += [
         "-fps_mode", "passthrough",
         "-flush_packets", "1",
-        "-max_interleave_delta", "100000",
 
         "-max_muxing_queue_size", str(MAX_MUXING_QUEUE_SIZE),
         "-flvflags", "no_duration_filesize",
@@ -106,6 +100,7 @@ def _seconds_since_progress():
 
 
 def stderr_reader(proc):
+    """Echo ffmpeg's stderr to our own stderr and record activity time."""
     try:
         for raw_line in iter(proc.stderr.readline, b""):
             if not raw_line:
@@ -119,6 +114,7 @@ def stderr_reader(proc):
 
 
 def watchdog(proc):
+    """Force-restart if ffmpeg stops producing output while still running."""
     while not _watchdog_stop.is_set():
         if proc.poll() is not None:
             return
@@ -148,9 +144,12 @@ def stop_process(process):
 
 def cleanup():
     global streamlink_process, ffmpeg_process
+
     print("\nStopping processes...")
+
     stop_process(ffmpeg_process)
     stop_process(streamlink_process)
+
     streamlink_process = None
     ffmpeg_process = None
 
@@ -175,7 +174,7 @@ while True:
         print("Starting TikTok -> YouTube stream...")
         print("Quality: BEST")
         print("Video: COPY (NO RE-ENCODE)")
-        print(f"Audio: {'COPY' if COPY_AUDIO else 'AAC RE-ENCODE (moderate sync)'}")
+        print("Audio: AAC RE-ENCODE (TARGET MATCHED CONFIG)")
         print(f"Stall watchdog: {STALL_TIMEOUT}s")
         print("========================================\n")
 
@@ -225,6 +224,7 @@ while True:
         print("Stream stopped.")
         print(f"FFmpeg exit code: {ffmpeg_return}")
         print(f"Streamlink exit code: {streamlink_return}")
+
         print(f"Restarting in {restart_delay} second(s)...")
         print("========================================\n")
 
