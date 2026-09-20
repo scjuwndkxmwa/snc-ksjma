@@ -19,6 +19,12 @@ COPY_AUDIO = True
 STALL_TIMEOUT = 25
 WATCHDOG_INTERVAL = 5
 
+# Default queue is small; if audio processing lags behind video copy
+# even briefly, ffmpeg can hit this limit and hard-exit with
+# "Too many packets buffered for output stream" -- a real, silent
+# crash cause distinct from a normal network disconnect.
+MAX_MUXING_QUEUE_SIZE = 4096
+
 STREAMLINK_CMD = [
     "streamlink",
     "--hls-live-edge", "3",
@@ -42,6 +48,11 @@ def build_ffmpeg_cmd(copy_audio: bool):
         "-stats",
         "-nostdin",
 
+        # Force single-thread scheduling: on CPU-quota-limited
+        # containers, multi-threaded encode/decode can actually perform
+        # *worse* due to thread scheduling fighting the cgroup CPU quota.
+        "-threads", "1",
+
         # Rebuild timestamps from wall-clock arrival time instead of trusting
         # the source's own PTS/DTS. Main fix for non-monotonic DTS jumps
         # caused by TikTok segment hiccups/reconnects while video is copied.
@@ -60,7 +71,12 @@ def build_ffmpeg_cmd(copy_audio: bool):
     ]
 
     if copy_audio:
-        cmd += ["-c:a", "copy"]
+        # TikTok's live audio arrives packaged as MPEG-TS/ADTS AAC.
+        # FLV (YouTube's ingest container) expects AAC without ADTS
+        # framing. Copying without this filter causes exactly
+        # intermittent/garbled audio -- often WITHOUT ffmpeg crashing,
+        # so it will not always trigger the auto-fallback below.
+        cmd += ["-c:a", "copy", "-bsf:a", "aac_adtstoasc"]
     else:
         cmd += [
             "-c:a", "aac",
@@ -75,6 +91,7 @@ def build_ffmpeg_cmd(copy_audio: bool):
         "-flush_packets", "1",
         "-max_interleave_delta", "0",
 
+        "-max_muxing_queue_size", str(MAX_MUXING_QUEUE_SIZE),
         "-flvflags", "no_duration_filesize",
 
         "-f", "flv",
