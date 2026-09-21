@@ -7,7 +7,7 @@ import sys
 
 TIKTOK_URL = "https://www.tiktok.com/@c.ahmed.h/live"
 
-YOUTUBE_STREAM_KEY = "8yjs-eb3y-wt8s-y45e-ezsu"
+YOUTUBE_STREAM_KEY = "4jvb-dz1u-km9t-6gxk-1yex"
 
 YOUTUBE_RTMP = (
     "rtmp://a.rtmp.youtube.com/live2/"
