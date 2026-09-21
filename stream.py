@@ -3,55 +3,30 @@ import subprocess
 import time
 import signal
 import sys
+from streamlink import Streamlink
 
 TIKTOK_URL = "https://www.tiktok.com/@c.ahmed.h/live"
 YOUTUBE_STREAM_KEY = "4jvb-dz1u-km9t-6gxk-1yex"
-YOUTUBE_RTMP = f"rtmp://a.rtmp.youtube.com/live2/{YOUTUBE_STREAM_KEY}"
 
-STREAMLINK_CMD = [
-    "streamlink",
-    "--hls-live-edge", "2",
-    "--ringbuffer-size", "512M",
-    "--retry-streams", "10",
-    "--retry-max", "50",
-    "--stream-segment-attempts", "10",
-    "--stream-segment-timeout", "30",
-    "--stream-timeout", "60",
-    "--stdout",
-    TIKTOK_URL,
-    "best"
-]
+session = Streamlink()
+session.set_option("http-headers", {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Referer": "https://www.tiktok.com/"
+})
 
-FFMPEG_CMD = [
-    "ffmpeg",
-    "-hide_banner",
-    "-loglevel", "warning",
-    "-stats",
-    "-thread_queue_size", "2048",
-    "-use_wallclock_as_timestamps", "1",
-    "-avoid_negative_ts", "make_zero",
-    "-copytb", "1",
-    "-fflags", "+genpts+discardcorrupt+nobuffer",
-    "-err_detect", "ignore_err",
-    "-i", "-",
-    "-map", "0:v:0",
-    "-c:v", "copy",
-    "-fps_mode", "passthrough",
-    "-map", "0:a:0?",
-    "-c:a", "aac",
-    "-b:a", "128k",
-    "-ar", "44100",
-    "-ac", "2",
-    "-af", "aresample=async=1000:min_hard_comp=0.100000:first_pts=0",
-    "-flush_packets", "1",
-    "-flvflags", "no_duration_filesize",
-    "-f", "flv",
-    YOUTUBE_RTMP
-]
-
-streamlink_process = None
 ffmpeg_process = None
 stopping = False
+
+def get_live_stream_url(tiktok_url):
+    try:
+        streams = session.streams(tiktok_url)
+        if "best" in streams:
+            return streams["best"].url
+        elif "live" in streams:
+            return streams["live"].url
+    except Exception as e:
+        print(f"Error fetching TikTok stream: {e}")
+    return None
 
 def stop_process(process, name="process"):
     if process is None:
@@ -78,19 +53,9 @@ def stop_process(process, name="process"):
             pass
 
 def cleanup():
-    global streamlink_process, ffmpeg_process
-    
+    global ffmpeg_process
     stop_process(ffmpeg_process, "FFmpeg")
-    stop_process(streamlink_process, "Streamlink")
-
-    if streamlink_process and streamlink_process.stdout:
-        try:
-            streamlink_process.stdout.close()
-        except Exception:
-            pass
-
     ffmpeg_process = None
-    streamlink_process = None
 
 def signal_handler(sig, frame):
     global stopping
@@ -105,54 +70,57 @@ signal.signal(signal.SIGTERM, signal_handler)
 while not stopping:
     try:
         print("\n========================================")
-        print("TikTok -> YouTube Persistent Relay")
-        print("Auto Reconnect & Cleanup: ACTIVE")
+        print("Searching for TikTok LIVE...")
         print("========================================\n")
 
         cleanup()
 
-        streamlink_process = subprocess.Popen(
-            STREAMLINK_CMD,
-            stdout=subprocess.PIPE,
-            stderr=None,
-            bufsize=0
-        )
+        stream_url = get_live_stream_url(TIKTOK_URL)
 
-        ffmpeg_process = subprocess.Popen(
-            FFMPEG_CMD,
-            stdin=streamlink_process.stdout,
-            stdout=None,
-            stderr=None,
-            bufsize=0
-        )
+        if stream_url:
+            print("LIVE detected! Starting FFmpeg relay...")
 
-        try:
-            streamlink_process.stdout.close()
-        except Exception:
-            pass
+            ffmpeg_cmd = [
+                "ffmpeg",
+                "-hide_banner",
+                "-loglevel", "warning",
+                "-stats",
+                "-thread_queue_size", "2048",
+                "-use_wallclock_as_timestamps", "1",
+                "-avoid_negative_ts", "make_zero",
+                "-copytb", "1",
+                "-fflags", "+genpts+discardcorrupt+nobuffer",
+                "-err_detect", "ignore_err",
+                "-i", stream_url,
+                "-map", "0:v:0",
+                "-c:v", "copy",
+                "-fps_mode", "passthrough",
+                "-map", "0:a:0?",
+                "-c:a", "aac",
+                "-b:a", "128k",
+                "-ar", "44100",
+                "-ac", "2",
+                "-af", "aresample=async=1000:min_hard_comp=0.100000:first_pts=0",
+                "-flush_packets", "1",
+                "-flvflags", "no_duration_filesize",
+                "-f", "flv",
+                f"rtmp://a.rtmp.youtube.com/live2/{YOUTUBE_STREAM_KEY}"
+            ]
 
-        while not stopping:
-            ffmpeg_return = ffmpeg_process.poll()
-            streamlink_return = streamlink_process.poll()
+            ffmpeg_process = subprocess.Popen(ffmpeg_cmd)
 
-            if ffmpeg_return is not None:
-                print(f"\nFFmpeg stopped (exit code: {ffmpeg_return})")
-                break
-
-            if streamlink_return is not None:
-                print(f"\nStreamlink stopped (exit code: {streamlink_return})")
-                break
-
-            time.sleep(1)
+            while not stopping:
+                ffmpeg_return = ffmpeg_process.poll()
+                if ffmpeg_return is not None:
+                    print(f"\nFFmpeg stopped (exit code: {ffmpeg_return})")
+                    break
+                time.sleep(2)
+        else:
+            print("No active LIVE found or TikTok blocked the request.")
 
         if stopping:
             break
 
-        print("\n========================================")
-        print("Live session ended or disconnected.")
-        print("Cleaning up processes before restart...")
-        print("========================================\n")
-        
         cleanup()
 
     except KeyboardInterrupt:
@@ -164,5 +132,5 @@ while not stopping:
         cleanup()
 
     if not stopping:
-        print("\nWaiting 10 seconds before searching for the LIVE again...")
-        time.sleep(10)
+        print("\nWaiting 15 seconds before checking again...")
+        time.sleep(15)
