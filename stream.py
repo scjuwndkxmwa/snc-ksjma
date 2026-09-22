@@ -8,7 +8,6 @@ TIKTOK_URL = "https://www.tiktok.com/@alhassnali21/live"
 YOUTUBE_STREAM_KEY = "4jvb-dz1u-km9t-6gxk-1yex"
 YOUTUBE_RTMP = f"rtmp://a.rtmp.youtube.com/live2/{YOUTUBE_STREAM_KEY}"
 
-# Removed retry flags to prevent pipe deadlock when stream closes
 STREAMLINK_CMD = [
     "streamlink",
     "--hls-live-edge", "2",
@@ -16,7 +15,6 @@ STREAMLINK_CMD = [
     "--stream-segment-attempts", "3",
     "--stream-segment-timeout", "10",
     "--stream-timeout", "15",
-    "--hls-timeout", "15",
     "--stdout",
     TIKTOK_URL,
     "best"
@@ -103,10 +101,8 @@ while not stopping:
             bufsize=0
         )
 
-        # Allow Streamlink to receive SIGPIPE if FFmpeg stops
         streamlink_process.stdout.close()
 
-        # Monitor both processes
         while not stopping:
             sl_code = streamlink_process.poll()
             ff_code = ffmpeg_process.poll()
