@@ -4,13 +4,16 @@ import time
 import signal
 import sys
 
-TIKTOK_URL = "https://www.tiktok.com/@amirail5196/live"
-YOUTUBE_RTMP = "rtmp://a.rtmp.youtube.com/live2/7944-23tj-rd40-5cww-d1gy"
+TIKTOK_URL = "https://www.tiktok.com/@amirai15196/live"
+
+YOUTUBE_STREAM_KEY = os.getenv("YOUTUBE_STREAM_KEY", "7944-23tj-rd40-5cww-d1gy")
+YOUTUBE_RTMP = f"rtmp://a.rtmp.youtube.com/live2/{YOUTUBE_STREAM_KEY}"
 
 CHECK_INTERVAL_OFFLINE = 30  
 
 STREAMLINK_CMD = [
     "streamlink",
+    "--http-header", "User-Agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
     "--hls-live-edge", "2",
     "--ringbuffer-size", "512M",
     "--retry-streams", "2",
@@ -102,7 +105,7 @@ while True:
         streamlink_process = subprocess.Popen(
             STREAMLINK_CMD,
             stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            stderr=None,
             bufsize=0
         )
 
