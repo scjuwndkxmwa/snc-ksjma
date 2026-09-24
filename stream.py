@@ -4,8 +4,8 @@ import time
 import signal
 import sys
 
-TIKTOK_URL = os.environ.get("TIKTOK_URL", "https://www.tiktok.com/@abdullahal3085/live")
-YOUTUBE_RTMP = os.environ.get("YOUTUBE_RTMP", "rtmp://a.rtmp.youtube.com/live2/r77y-h37m-x6xr-x0dj-0g6q")
+TIKTOK_URL = "https://www.tiktok.com/@abdullahal3085/live"
+YOUTUBE_RTMP = "rtmp://a.rtmp.youtube.com/live2/r77y-h37m-x6xr-x0dj-0g6q"
 
 STREAMLINK_CMD = [
     "streamlink",
@@ -135,7 +135,6 @@ def run_once():
 
     finally:
         cleanup()
-        sys.exit(0)
 
 
 if __name__ == "__main__":
