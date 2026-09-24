@@ -46,7 +46,7 @@ def is_tiktok_online(url):
 
 
 print("========================================")
-print("TikTok Monitor - Listening for Live...")
+print("TikTok Monitor - Continuous Listening...")
 print("========================================\n")
 
 while True:
@@ -56,17 +56,17 @@ while True:
         print(f"[{time.strftime('%H:%M:%S')}] [MONITOR] Checking TikTok status...")
 
         if not is_tiktok_online(TIKTOK_URL):
-            print(f"[{time.strftime('%H:%M:%S')}] [MONITOR] TikTok is OFFLINE. Next check in {CHECK_INTERVAL_OFFLINE}s...")
+            print(f"[{time.strftime('%H:%M:%S')}] [MONITOR] TikTok is OFFLINE. Re-checking in {CHECK_INTERVAL_OFFLINE}s...")
             time.sleep(CHECK_INTERVAL_OFFLINE)
             continue
 
         print(f"\n[{time.strftime('%H:%M:%S')}] [MONITOR] TikTok LIVE detected!")
-        print(f"[{time.strftime('%H:%M:%S')}] [MONITOR] Launching stream.py process...")
+        print(f"[{time.strftime('%H:%M:%S')}] [MONITOR] Executing stream.py...")
 
         stream_process = subprocess.Popen([sys.executable, "stream.py"])
         stream_process.wait()
 
-        print(f"[{time.strftime('%H:%M:%S')}] [MONITOR] stream.py process fully terminated.")
+        print(f"[{time.strftime('%H:%M:%S')}] [MONITOR] stream.py finished and closed.")
 
     except KeyboardInterrupt:
         cleanup()
