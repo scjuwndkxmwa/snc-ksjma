@@ -107,6 +107,16 @@ while True:
             bufsize=0
         )
 
+        time.sleep(3)
+        
+        if streamlink_process.poll() is not None:
+            print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Stream is OFFLINE. Re-checking in {CHECK_INTERVAL_OFFLINE} seconds...")
+            cleanup()
+            time.sleep(CHECK_INTERVAL_OFFLINE)
+            continue
+
+        print(f"\n[{time.strftime('%Y-%m-%d %H:%M:%S')}] Stream ONLINE! Starting Restream to YouTube...")
+        
         ffmpeg_process = subprocess.Popen(
             FFMPEG_CMD,
             stdin=streamlink_process.stdout,
@@ -119,18 +129,16 @@ while True:
 
         ffmpeg_return = ffmpeg_process.wait()
         
-        print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Restream cycle finished (FFmpeg code: {ffmpeg_return}).")
+        print(f"\n[{time.strftime('%Y-%m-%d %H:%M:%S')}] Stream ended (FFmpeg exit code: {ffmpeg_return}). Exiting to trigger Railway Auto-Restart...")
+        cleanup()
+        sys.exit(1)
 
     except KeyboardInterrupt:
         print("\nStopping...")
         cleanup()
-        break
+        sys.exit(0)
 
     except Exception as e:
         print(f"\n[ERROR] Unexpected error: {e}")
-
-    finally:
         cleanup()
-
-    print(f"Waiting {CHECK_INTERVAL_OFFLINE} seconds before checking for the next stream...\n")
-    time.sleep(CHECK_INTERVAL_OFFLINE)
+        sys.exit(1)
