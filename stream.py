@@ -8,6 +8,7 @@ TIKTOK_URL = "https://www.tiktok.com/@abdullahal3085/live"
 YOUTUBE_RTMP = "rtmp://a.rtmp.youtube.com/live2/3jdh-9t5f-u7tc-89qv-2zms"
 
 CHECK_INTERVAL_OFFLINE = 30  
+STREAM_ENDED_WAIT = 120  
 
 STREAMLINK_CMD = [
     "streamlink",
@@ -109,10 +110,10 @@ while True:
         time.sleep(3)
         
         if streamlink_process.poll() is not None:
-            print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Stream is OFFLINE. Exiting to trigger Railway Auto-Restart in {CHECK_INTERVAL_OFFLINE}s...")
+            print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Stream is OFFLINE. Re-checking in {CHECK_INTERVAL_OFFLINE} seconds...")
             cleanup()
             time.sleep(CHECK_INTERVAL_OFFLINE)
-            sys.exit(1)
+            continue
 
         print(f"\n[{time.strftime('%Y-%m-%d %H:%M:%S')}] Stream ONLINE! Starting Restream to YouTube...")
         
@@ -128,16 +129,17 @@ while True:
 
         ffmpeg_return = ffmpeg_process.wait()
         
-        print(f"\n[{time.strftime('%Y-%m-%d %H:%M:%S')}] Stream ended (FFmpeg exit code: {ffmpeg_return}). Exiting to trigger Railway Auto-Restart...")
+        print(f"\n[{time.strftime('%Y-%m-%d %H:%M:%S')}] Stream ended (FFmpeg exit code: {ffmpeg_return}).")
         cleanup()
-        sys.exit(1)
+        print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Pausing all operations for 2 minutes before resuming...")
+        time.sleep(STREAM_ENDED_WAIT)
 
     except KeyboardInterrupt:
         print("\nStopping...")
         cleanup()
-        sys.exit(0)
+        break
 
     except Exception as e:
         print(f"\n[ERROR] Unexpected error: {e}")
         cleanup()
-        sys.exit(1)
+        time.sleep(STREAM_ENDED_WAIT)
