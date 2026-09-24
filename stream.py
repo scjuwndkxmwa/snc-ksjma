@@ -11,6 +11,7 @@ CHECK_INTERVAL_OFFLINE = 30
 
 STREAMLINK_CMD = [
     "streamlink",
+    "--http-header", "User-Agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
     "--hls-live-edge", "2",
     "--ringbuffer-size", "512M",
     "--retry-streams", "2",
@@ -102,20 +103,10 @@ while True:
         streamlink_process = subprocess.Popen(
             STREAMLINK_CMD,
             stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            stderr=None,
             bufsize=0
         )
 
-        time.sleep(3)
-        
-        if streamlink_process.poll() is not None:
-            print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Stream is OFFLINE. Re-checking in {CHECK_INTERVAL_OFFLINE} seconds...")
-            cleanup()
-            time.sleep(CHECK_INTERVAL_OFFLINE)
-            continue
-
-        print(f"\n[{time.strftime('%Y-%m-%d %H:%M:%S')}] Stream ONLINE! Starting Restream to YouTube...")
-        
         ffmpeg_process = subprocess.Popen(
             FFMPEG_CMD,
             stdin=streamlink_process.stdout,
@@ -128,7 +119,7 @@ while True:
 
         ffmpeg_return = ffmpeg_process.wait()
         
-        print(f"\n[{time.strftime('%Y-%m-%d %H:%M:%S')}] Stream ended (FFmpeg exit code: {ffmpeg_return}).")
+        print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Restream cycle finished (FFmpeg code: {ffmpeg_return}).")
 
     except KeyboardInterrupt:
         print("\nStopping...")
