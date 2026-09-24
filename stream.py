@@ -11,7 +11,6 @@ CHECK_INTERVAL_OFFLINE = 30
 
 STREAMLINK_CMD = [
     "streamlink",
-    "--http-header", "User-Agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
     "--hls-live-edge", "2",
     "--ringbuffer-size", "512M",
     "--retry-streams", "2",
