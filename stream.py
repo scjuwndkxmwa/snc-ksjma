@@ -4,7 +4,7 @@ import time
 import signal
 import sys
 
-TIKTOK_URL = "https://www.tiktok.com/@mo_3la/live"
+TIKTOK_URL = "https://www.tiktok.com/@amr_noureldeen/live"
 YOUTUBE_RTMP = "rtmp://a.rtmp.youtube.com/live2/3jdh-9t5f-u7tc-89qv-2zms"
 
 CHECK_EVERY = 6
