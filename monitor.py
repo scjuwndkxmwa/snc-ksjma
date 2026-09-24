@@ -5,7 +5,7 @@ import signal
 import sys
 import streamlink
 
-TIKTOK_URL = os.environ.get("TIKTOK_URL", "https://www.tiktok.com/@d.shakertawfiqalaroury/live")
+TIKTOK_URL = os.environ.get("TIKTOK_URL", "https://www.tiktok.com/@abdullahal3085/live")
 CHECK_INTERVAL_OFFLINE = 15
 
 stream_process = None
