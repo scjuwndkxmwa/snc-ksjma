@@ -4,15 +4,11 @@ import time
 import signal
 import sys
 
-TIKTOK_URL = os.environ.get("TIKTOK_URL", "https://www.tiktok.com/@abdullahal3085/live")
+TIKTOK_URL = "https://www.tiktok.com/@abdullahal3085/live"
+YOUTUBE_RTMP = "rtmp://a.rtmp.youtube.com/live2/r77y-h37m-x6xr-x0dj-0g6q"
 
-YOUTUBE_KEYS = [
-    os.environ.get("YOUTUBE_KEY_1", "rtmp://a.rtmp.youtube.com/live2/r77y-h37m-x6xr-x0dj-0g6q"),
-    os.environ.get("YOUTUBE_KEY_2", "rtmp://a.rtmp.youtube.com/live2/s5m0-5x6j-mc60-jagc-bcr9")
-]
-
-current_key_index = 0
-CHECK_INTERVAL_OFFLINE = 30  
+CHECK_INTERVAL_OFFLINE = 30
+COOLDOWN_AFTER_STREAM_END = 180
 
 STREAMLINK_CMD = [
     "streamlink",
@@ -26,6 +22,39 @@ STREAMLINK_CMD = [
     "--stdout",
     TIKTOK_URL,
     "best"
+]
+
+FFMPEG_CMD = [
+    "ffmpeg",
+    "-hide_banner",
+    "-loglevel", "warning",
+    "-stats",
+
+    "-dts_delta_threshold", "1",
+    "-fflags", "+genpts+discardcorrupt",
+    "-err_detect", "ignore_err",
+
+    "-thread_queue_size", "1024",
+    "-i", "-",
+
+    "-map", "0:v:0",
+    "-c:v", "copy",
+
+    "-map", "0:a:0?",
+    "-c:a", "aac",
+    "-b:a", "128k",
+    "-ar", "44100",
+    "-ac", "2",
+    "-af", "aresample=async=1000:min_hard_comp=0.100000:first_pts=0",
+
+    "-fps_mode", "passthrough",
+    "-flush_packets", "1",
+
+    "-flvflags", "no_duration_filesize",
+    "-rtmp_live", "live",
+
+    "-f", "flv",
+    YOUTUBE_RTMP
 ]
 
 streamlink_process = None
@@ -65,62 +94,29 @@ signal.signal(signal.SIGTERM, signal_handler)
 
 print("========================================")
 print("TikTok Live Monitor & Auto-Restreamer")
-print("Status: RUNNING & LISTENING (Alternating Dual Keys)...")
+print("Status: RUNNING & LISTENING...")
 print("========================================\n")
 
 while True:
     try:
         cleanup()
-        
+
         streamlink_process = subprocess.Popen(
             STREAMLINK_CMD,
             stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
             bufsize=0
         )
 
         time.sleep(3)
-        
+
         if streamlink_process.poll() is not None:
             print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Stream is OFFLINE. Re-checking in {CHECK_INTERVAL_OFFLINE} seconds...")
             cleanup()
             time.sleep(CHECK_INTERVAL_OFFLINE)
             continue
 
-        active_rtmp_url = YOUTUBE_KEYS[current_key_index]
-        print(f"\n[{time.strftime('%Y-%m-%d %H:%M:%S')}] Stream ONLINE! Starting Restream to YouTube using Key #{current_key_index + 1}...")
-
-        FFMPEG_CMD = [
-            "ffmpeg",
-            "-hide_banner",
-            "-loglevel", "warning",
-            "-stats",
-
-            "-dts_delta_threshold", "1",
-            "-fflags", "+genpts+discardcorrupt",
-            "-err_detect", "ignore_err",
-
-            "-thread_queue_size", "1024",
-            "-i", "-",
-
-            "-map", "0:v:0",
-            "-c:v", "copy",
-
-            "-map", "0:a:0?",
-            "-c:a", "aac",
-            "-b:a", "128k",
-            "-ar", "44100",
-            "-ac", "2",
-            "-af", "aresample=async=1000:min_hard_comp=0.100000:first_pts=0",
-
-            "-fps_mode", "passthrough",
-            "-flush_packets", "1",
-
-            "-flvflags", "no_duration_filesize",
-
-            "-f", "flv",
-            active_rtmp_url
-        ]
+        print(f"\n[{time.strftime('%Y-%m-%d %H:%M:%S')}] Stream ONLINE! Starting Restream to YouTube...")
 
         ffmpeg_process = subprocess.Popen(
             FFMPEG_CMD,
@@ -133,11 +129,13 @@ while True:
         streamlink_process.stdout.close()
 
         ffmpeg_return = ffmpeg_process.wait()
-        
+
         print(f"\n[{time.strftime('%Y-%m-%d %H:%M:%S')}] Stream ended (FFmpeg exit code: {ffmpeg_return}).")
 
-        current_key_index = (current_key_index + 1) % len(YOUTUBE_KEYS)
-        print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Next stream will use Key #{current_key_index + 1}.")
+        cleanup()
+
+        print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Cooldown {COOLDOWN_AFTER_STREAM_END}s before allowing a new stream session...")
+        time.sleep(COOLDOWN_AFTER_STREAM_END)
 
     except KeyboardInterrupt:
         print("\nStopping...")
