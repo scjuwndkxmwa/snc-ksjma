@@ -5,7 +5,7 @@ import signal
 import sys
 
 TIKTOK_URL = "https://www.tiktok.com/@abdullahal3085/live"
-YOUTUBE_RTMP = "rtmp://a.rtmp.youtube.com/live2/u1bv-v7m7-b074-ha33-b8vd"
+YOUTUBE_RTMP = "rtmp://a.rtmp.youtube.com/live2/3jdh-9t5f-u7tc-89qv-2zms"
 
 CHECK_INTERVAL_OFFLINE = 30  
 
@@ -109,10 +109,10 @@ while True:
         time.sleep(3)
         
         if streamlink_process.poll() is not None:
-            print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Stream is OFFLINE. Re-checking in {CHECK_INTERVAL_OFFLINE} seconds...")
+            print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Stream is OFFLINE. Exiting to trigger Railway Auto-Restart in {CHECK_INTERVAL_OFFLINE}s...")
             cleanup()
             time.sleep(CHECK_INTERVAL_OFFLINE)
-            continue
+            sys.exit(1)
 
         print(f"\n[{time.strftime('%Y-%m-%d %H:%M:%S')}] Stream ONLINE! Starting Restream to YouTube...")
         
