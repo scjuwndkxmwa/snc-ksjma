@@ -34,15 +34,16 @@ FFMPEG_CMD = [
     "-loglevel", "warning",
     "-stats",
 
-    "-dts_delta_threshold", "1",
-    "-fflags", "+genpts+discardcorrupt",
-    "-err_detect", "ignore_err",
-
     "-thread_queue_size", "1024",
     "-i", "-",
 
-    "-map", "0:v:0",
-    "-c:v", "copy",
+    "-c:v", "libx264",
+    "-preset", "ultrafast",
+    "-tune", "zerolatency",
+    "-g", "60",
+    "-keyint_min", "60",
+    "-sc_threshold", "0",
+    "-pix_fmt", "yuv420p",
 
     "-map", "0:a:0?",
     "-c:a", "aac",
@@ -50,13 +51,7 @@ FFMPEG_CMD = [
     "-ar", "44100",
     "-ac", "2",
 
-    "-af", "aresample=async=1000:min_hard_comp=0.100000:first_pts=0",
-
-    "-fps_mode", "passthrough",
-    "-flush_packets", "1",
-
     "-flvflags", "no_duration_filesize",
-
     "-f", "flv",
     YOUTUBE_RTMP
 ]
@@ -202,6 +197,8 @@ while True:
                 if streamlink_process.poll() is not None or ffmpeg_process.poll() is not None:
                     print("\n[SYSTEM] TikTok LIVE ended or streaming process stopped.", flush=True)
                     cleanup()
+                    print("[SYSTEM] Waiting 15s for YouTube to reset session...", flush=True)
+                    time.sleep(15)
                     break
 
             print("[SYSTEM] Returning to LIVE monitor...", flush=True)
