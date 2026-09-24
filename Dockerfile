@@ -10,4 +10,4 @@ COPY . /app
 
 RUN pip install --no-cache-dir "urllib3<2.0.0" -r requirements.txt
 
-CMD ["python", "stream.py"]
+CMD ["python", "monitor.py"]
