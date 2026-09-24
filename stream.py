@@ -82,7 +82,7 @@ def cleanup():
 
 def signal_handler(sig, frame):
     cleanup()
-    os._exit(0)
+    sys.exit(0)
 
 
 signal.signal(signal.SIGINT, signal_handler)
@@ -103,15 +103,43 @@ print("TikTok Live Monitor & Restreamer")
 print("========================================\n")
 
 while True:
-    cleanup()
-    print(f"[{time.strftime('%H:%M:%S')}] Checking TikTok status...")
+    try:
+        cleanup()
+        print(f"[{time.strftime('%H:%M:%S')}] Checking TikTok status...")
 
-    if not is_tiktok_online():
-        print(f"[{time.strftime('%H:%M:%S')}] Stream OFFLINE. Checking again in {CHECK_INTERVAL_OFFLINE}s...")
-        time.sleep(CHECK_INTERVAL_OFFLINE)
-        continue
+        if not is_tiktok_online():
+            print(f"[{time.strftime('%H:%M:%S')}] Stream OFFLINE. Checking again in {CHECK_INTERVAL_OFFLINE}s...")
+            time.sleep(CHECK_INTERVAL_OFFLINE)
+            continue
 
-    print(f"\n[{time.strftime('%H:%M:%S')}] TikTok LIVE Detected!")
-    print(f"[{time.strftime('%H:%M:%S')}] Exiting process NOW to force Railway Restart...")
-    
-    os._exit(1)
+        print(f"\n[{time.strftime('%H:%M:%S')}] TikTok LIVE Detected! Starting Pipe to YouTube...")
+        
+        streamlink_process = subprocess.Popen(
+            STREAMLINK_CMD,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            bufsize=0
+        )
+
+        ffmpeg_process = subprocess.Popen(
+            FFMPEG_CMD,
+            stdin=streamlink_process.stdout,
+            stdout=None,
+            stderr=None,
+            bufsize=0
+        )
+
+        streamlink_process.stdout.close()
+        ffmpeg_process.wait()
+
+        print(f"[{time.strftime('%H:%M:%S')}] Stream ended. Back to monitoring...")
+
+    except KeyboardInterrupt:
+        cleanup()
+        break
+    except Exception as e:
+        print(f"[ERROR] {e}")
+    finally:
+        cleanup()
+
+    time.sleep(CHECK_INTERVAL_OFFLINE)
