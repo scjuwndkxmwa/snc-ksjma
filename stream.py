@@ -8,12 +8,12 @@ import streamlink
 TIKTOK_URL = "https://www.tiktok.com/@abdullahal3085/live"
 YOUTUBE_RTMP = "rtmp://a.rtmp.youtube.com/live2/r77y-h37m-x6xr-x0dj-0g6q"
 
-CHECK_INTERVAL_OFFLINE = 15
+CHECK_INTERVAL_OFFLINE = 10
 
 STREAMLINK_CMD = [
     "streamlink",
-    "--hls-live-edge", "2",
-    "--ringbuffer-size", "512M",
+    "--hls-live-edge", "1",
+    "--ringbuffer-size", "128M",
     "--retry-streams", "0",
     "--retry-max", "0",
     "--stream-timeout", "10",
@@ -28,12 +28,13 @@ FFMPEG_CMD = [
     "-loglevel", "warning",
     "-stats",
 
-    "-fflags", "+genpts+discardcorrupt+igndts",
+    "-fflags", "+genpts+discardcorrupt+igndts+nobuffer",
+    "-flags", "+low_delay",
     "-err_detect", "ignore_err",
 
-    "-thread_queue_size", "2048",
-    "-analyzeduration", "10000000",
-    "-probesize", "10000000",
+    "-thread_queue_size", "4096",
+    "-analyzeduration", "1000000",
+    "-probesize", "1000000",
     "-i", "-",
 
     "-map", "0:v:0",
@@ -44,7 +45,6 @@ FFMPEG_CMD = [
     "-b:a", "128k",
     "-ar", "44100",
     "-ac", "2",
-    "-af", "aresample=async=1000:min_hard_comp=0.100000:first_pts=0",
 
     "-fps_mode", "passthrough",
     "-flush_packets", "1",
@@ -117,7 +117,7 @@ while True:
         streamlink_process = subprocess.Popen(
             STREAMLINK_CMD,
             stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
             bufsize=0
         )
 
