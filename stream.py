@@ -7,6 +7,8 @@ import sys
 TIKTOK_URL = "https://www.tiktok.com/@abdullahal3085/live"
 YOUTUBE_RTMP = "rtmp://a.rtmp.youtube.com/live2/3jdh-9t5f-u7tc-89qv-2zms"
 
+CHECK_INTERVAL_OFFLINE = 30  
+
 STREAMLINK_CMD = [
     "streamlink",
     "--hls-live-edge", "2",
@@ -49,12 +51,41 @@ FFMPEG_CMD = [
 
     "-flvflags", "no_duration_filesize",
 
+    "-rw_timeout", "10000000",
+
     "-f", "flv",
     YOUTUBE_RTMP
 ]
 
 streamlink_process = None
 ffmpeg_process = None
+
+
+def reset_youtube_session(rtmp_url):
+    print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] [RTMP RESET] Resetting YouTube session...", flush=True)
+    
+    dummy_cmd = [
+        "ffmpeg",
+        "-hide_banner",
+        "-loglevel", "quiet",
+        "-f", "lavfi", "-i", "color=c=black:s=320x240:r=10",
+        "-f", "lavfi", "-i", "anullsrc=r=22050:cl=mono",
+        "-c:v", "libx264", "-preset", "ultrafast", "-tune", "zerolatency",
+        "-c:a", "aac",
+        "-f", "flv",
+        rtmp_url
+    ]
+    
+    try:
+        p = subprocess.Popen(dummy_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        time.sleep(2)
+        p.kill()
+        p.wait()
+        print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] [RTMP RESET] Session cleared successfully.", flush=True)
+    except Exception as e:
+        print(f"[RTMP RESET Warning] Could not reset session: {e}", flush=True)
+    
+    time.sleep(2)
 
 
 def stop_process(process):
@@ -79,7 +110,7 @@ def cleanup():
 
 
 def signal_handler(sig, frame):
-    print("\n[SYSTEM] Stopped by Railway / User.")
+    print("\n[SYSTEM] Stopped by Railway / User.", flush=True)
     cleanup()
     sys.exit(0)
 
@@ -88,13 +119,12 @@ signal.signal(signal.SIGINT, signal_handler)
 signal.signal(signal.SIGTERM, signal_handler)
 
 
-def run_once():
-    global streamlink_process, ffmpeg_process
-    print("========================================")
-    print("TikTok Live One-Time Restreamer")
-    print("Status: CHECKING STREAM...")
-    print("========================================\n")
+print("========================================", flush=True)
+print("TikTok Live Monitor & Auto-Restreamer", flush=True)
+print("Status: RUNNING & LISTENING...", flush=True)
+print("========================================\n", flush=True)
 
+while True:
     try:
         cleanup()
         
@@ -108,11 +138,16 @@ def run_once():
         time.sleep(3)
         
         if streamlink_process.poll() is not None:
-            print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Stream is OFFLINE. Exiting script.")
-            return
+            print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Stream is OFFLINE. Re-checking in {CHECK_INTERVAL_OFFLINE} seconds...", flush=True)
+            cleanup()
+            time.sleep(CHECK_INTERVAL_OFFLINE)
+            continue
 
-        print(f"\n[{time.strftime('%Y-%m-%d %H:%M:%S')}] Stream ONLINE! Starting Restream to YouTube...")
+        print(f"\n[{time.strftime('%Y-%m-%d %H:%M:%S')}] Stream ONLINE!", flush=True)
         
+        reset_youtube_session(YOUTUBE_RTMP)
+
+        print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Starting Restream to YouTube...", flush=True)
         ffmpeg_process = subprocess.Popen(
             FFMPEG_CMD,
             stdin=streamlink_process.stdout,
@@ -125,17 +160,18 @@ def run_once():
 
         ffmpeg_return = ffmpeg_process.wait()
         
-        print(f"\n[{time.strftime('%Y-%m-%d %H:%M:%S')}] Stream ended (FFmpeg exit code: {ffmpeg_return}). Exiting script.")
+        print(f"\n[{time.strftime('%Y-%m-%d %H:%M:%S')}] Stream ended (FFmpeg exit code: {ffmpeg_return}).", flush=True)
 
     except KeyboardInterrupt:
-        print("\nStopping...")
+        print("\nStopping...", flush=True)
+        cleanup()
+        break
 
     except Exception as e:
-        print(f"\n[ERROR] Unexpected error: {e}")
+        print(f"\n[ERROR] Unexpected error: {e}", flush=True)
 
     finally:
         cleanup()
 
-
-if __name__ == "__main__":
-    run_once()
+    print(f"Waiting {CHECK_INTERVAL_OFFLINE} seconds before checking for the next stream...\n", flush=True)
+    time.sleep(CHECK_INTERVAL_OFFLINE)
