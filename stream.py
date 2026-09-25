@@ -21,13 +21,14 @@ def get_direct_url():
         "yt-dlp",
         "-g",
         "-f", "best[ext=mp4]/best",
-        "--extractor-args", "youtube:player_client=ios,mweb,android",
         "--no-check-certificates",
         YOUTUBE_VIDEO_URL
     ]
     
-    if COOKIES_ENV and os.path.exists(COOKIES_PATH):
+    if os.path.exists(COOKIES_PATH):
         cmd.extend(["--cookies", COOKIES_PATH])
+    else:
+        cmd.extend(["--extractor-args", "youtube:player_client=ios,android,mweb"])
 
     result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     if result.returncode == 0 and result.stdout.strip():
