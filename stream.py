@@ -31,33 +31,48 @@ if COOKIES_ENV:
 
 
 # =========================================================
-# GET YOUTUBE HLS URL
+# GET DIRECT MEDIA URL
 # =========================================================
 
 def get_direct_url():
 
-    print("[INFO] Extracting YouTube HLS URL via yt-dlp...")
+    print("[INFO] Extracting YouTube media URL via yt-dlp...")
 
     cmd = [
         "yt-dlp",
 
         "-g",
 
-        "-f", "best",
+        # H.264 video + AAC audio when available.
+        # Fallback to the best available format.
+        "-f",
+        "bestvideo[vcodec^=avc1]+bestaudio[acodec^=mp4a]/best[vcodec^=avc1][acodec^=mp4a]/best",
 
         "--no-check-certificates",
 
+        # Use BgUtils PO Token provider.
         "--extractor-args",
-        "youtube:player_client=web_safari",
+        "youtube:player_client=mweb",
 
         YOUTUBE_VIDEO_URL
     ]
 
+
+    # -----------------------------------------------------
+    # Cookies if supplied
+    # -----------------------------------------------------
+
     if os.path.exists(COOKIES_PATH):
+
         cmd.extend([
             "--cookies",
             COOKIES_PATH
         ])
+
+
+    # -----------------------------------------------------
+    # Run yt-dlp
+    # -----------------------------------------------------
 
     result = subprocess.run(
         cmd,
@@ -66,12 +81,15 @@ def get_direct_url():
         text=True
     )
 
+
     if result.returncode != 0:
 
         print("[ERROR] yt-dlp failed:")
+
         print(result.stderr.strip())
 
         return None
+
 
     urls = [
         line.strip()
@@ -79,23 +97,25 @@ def get_direct_url():
         if line.strip()
     ]
 
+
     if not urls:
 
         print(
-            "[ERROR] yt-dlp returned no HLS URL."
+            "[ERROR] yt-dlp returned no media URL."
         )
 
         return None
 
+
     print(
-        "[INFO] YouTube HLS URL obtained successfully."
+        f"[INFO] yt-dlp returned {len(urls)} media URL(s)."
     )
 
-    return urls[0]
+    return urls
 
 
 # =========================================================
-# FFMPEG PROCESS
+# FFMPEG
 # =========================================================
 
 ffmpeg_process = None
@@ -164,6 +184,7 @@ print(
 )
 print("Video: COPY")
 print("Audio: AAC")
+print("PO Token: BgUtils")
 print("========================================\n")
 
 
@@ -177,102 +198,184 @@ while True:
 
         cleanup()
 
-        stream_url = get_direct_url()
 
-        if not stream_url:
+        # -------------------------------------------------
+        # Extract media
+        # -------------------------------------------------
+
+        urls = get_direct_url()
+
+
+        if not urls:
 
             print(
-                "[WARNING] Could not get YouTube HLS URL."
+                "[WARNING] Could not extract media."
             )
 
             print(
-                "[INFO] Retrying in 15 seconds..."
+                "[INFO] Retrying in 30 seconds..."
             )
 
-            time.sleep(15)
+            time.sleep(30)
 
             continue
 
 
-        print(
-            "[INFO] HLS URL obtained!"
-        )
+        # -------------------------------------------------
+        # Determine input layout
+        # -------------------------------------------------
+
+        if len(urls) >= 2:
+
+            video_url = urls[0]
+            audio_url = urls[1]
+
+            print(
+                "[INFO] Separate video/audio streams found."
+            )
+
+
+            FFMPEG_CMD = [
+
+                "ffmpeg",
+
+                "-hide_banner",
+                "-loglevel", "warning",
+                "-stats",
+
+                "-re",
+
+                # Video
+                "-i",
+                video_url,
+
+                # Audio
+                "-i",
+                audio_url,
+
+                "-fflags",
+                "+genpts+discardcorrupt",
+
+                "-err_detect",
+                "ignore_err",
+
+                # Video
+                "-map",
+                "0:v:0",
+
+                "-c:v",
+                "copy",
+
+                # Audio
+                "-map",
+                "1:a:0?",
+
+                "-c:a",
+                "aac",
+
+                "-b:a",
+                "128k",
+
+                "-ar",
+                "44100",
+
+                "-ac",
+                "2",
+
+                "-af",
+                "aresample=async=1000:min_hard_comp=0.100000:first_pts=0",
+
+                "-fps_mode",
+                "passthrough",
+
+                "-flush_packets",
+                "1",
+
+                "-flvflags",
+                "no_duration_filesize",
+
+                "-f",
+                "flv",
+
+                YOUTUBE_RTMP_DESTINATION
+            ]
+
+
+        else:
+
+            stream_url = urls[0]
+
+            print(
+                "[INFO] Combined video/audio stream found."
+            )
+
+
+            FFMPEG_CMD = [
+
+                "ffmpeg",
+
+                "-hide_banner",
+                "-loglevel", "warning",
+                "-stats",
+
+                "-re",
+
+                "-fflags",
+                "+genpts+discardcorrupt",
+
+                "-err_detect",
+                "ignore_err",
+
+                "-i",
+                stream_url,
+
+                "-map",
+                "0:v:0",
+
+                "-c:v",
+                "copy",
+
+                "-map",
+                "0:a:0?",
+
+                "-c:a",
+                "aac",
+
+                "-b:a",
+                "128k",
+
+                "-ar",
+                "44100",
+
+                "-ac",
+                "2",
+
+                "-af",
+                "aresample=async=1000:min_hard_comp=0.100000:first_pts=0",
+
+                "-fps_mode",
+                "passthrough",
+
+                "-flush_packets",
+                "1",
+
+                "-flvflags",
+                "no_duration_filesize",
+
+                "-f",
+                "flv",
+
+                YOUTUBE_RTMP_DESTINATION
+            ]
+
+
+        # -------------------------------------------------
+        # Start FFmpeg
+        # -------------------------------------------------
 
         print(
             "[INFO] Starting FFmpeg → YouTube Live..."
         )
-
-
-        # -------------------------------------------------
-        # FFMPEG
-        # -------------------------------------------------
-
-        FFMPEG_CMD = [
-
-            "ffmpeg",
-
-            "-hide_banner",
-            "-loglevel", "warning",
-            "-stats",
-
-            # Play source in real time
-            "-re",
-
-            # Input
-            "-i",
-            stream_url,
-
-            # Timestamp handling
-            "-fflags",
-            "+genpts+discardcorrupt",
-
-            "-err_detect",
-            "ignore_err",
-
-            # Video
-            "-map",
-            "0:v:0",
-
-            "-c:v",
-            "copy",
-
-            # Audio
-            "-map",
-            "0:a:0?",
-
-            "-c:a",
-            "aac",
-
-            "-b:a",
-            "128k",
-
-            "-ar",
-            "44100",
-
-            "-ac",
-            "2",
-
-            "-af",
-            "aresample=async=1000:min_hard_comp=0.100000:first_pts=0",
-
-            # Keep original video timing
-            "-fps_mode",
-            "passthrough",
-
-            "-flush_packets",
-            "1",
-
-            # FLV
-            "-flvflags",
-            "no_duration_filesize",
-
-            # Output
-            "-f",
-            "flv",
-
-            YOUTUBE_RTMP_DESTINATION
-        ]
-
 
         ffmpeg_process = subprocess.Popen(
 
@@ -288,7 +391,7 @@ while True:
 
 
         print(
-            f"\n[INFO] FFmpeg ended "
+            f"[INFO] FFmpeg ended "
             f"(exit code: {return_code})."
         )
 
@@ -321,7 +424,7 @@ while True:
     )
 
     print(
-        "[INFO] Restarting in 5 seconds..."
+        "[INFO] Waiting 5 seconds before retry..."
     )
 
     time.sleep(5)
