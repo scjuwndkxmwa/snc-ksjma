@@ -21,7 +21,7 @@ YTDLP_CMD = [
 FFMPEG_CMD = [
     "ffmpeg",
     "-hide_banner",
-    "-loglevel", "error",
+    "-loglevel", "warning",
     "-re",
     "-i", "pipe:0",
     "-c:v", "libx264",
@@ -66,24 +66,31 @@ def signal_handler(sig, frame):
 signal.signal(signal.SIGINT, signal_handler)
 signal.signal(signal.SIGTERM, signal_handler)
 
-try:
-    ytdlp_process = subprocess.Popen(
-        YTDLP_CMD,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.DEVNULL
-    )
+print("[INFO] Starting continuous restream loop...")
 
-    ffmpeg_process = subprocess.Popen(
-        FFMPEG_CMD,
-        stdin=ytdlp_process.stdout,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL
-    )
+while True:
+    try:
+        ytdlp_process = subprocess.Popen(
+            YTDLP_CMD,
+            stdout=subprocess.PIPE,
+            stderr=sys.stderr
+        )
 
-    ytdlp_process.stdout.close()
-    ffmpeg_process.wait()
+        ffmpeg_process = subprocess.Popen(
+            FFMPEG_CMD,
+            stdin=ytdlp_process.stdout,
+            stdout=sys.stdout,
+            stderr=sys.stderr
+        )
 
-except Exception:
-    pass
-finally:
-    cleanup()
+        ytdlp_process.stdout.close()
+        ffmpeg_process.wait()
+
+        print("[INFO] Stream ended or restarted. Re-linking in 5 seconds...")
+        time.sleep(5)
+
+    except Exception as e:
+        print(f"[ERROR] Loop error: {e}")
+        time.sleep(5)
+    finally:
+        cleanup()
