@@ -8,65 +8,34 @@ YOUTUBE_VIDEO_URL = "https://youtu.be/mtKF4rn6SLM"
 YOUTUBE_STREAM_KEY = "r77y-h37m-x6xr-x0dj-0g6q"
 YOUTUBE_RTMP_DESTINATION = f"rtmp://a.rtmp.youtube.com/live2/{YOUTUBE_STREAM_KEY}"
 
-COOKIES_ENV = os.getenv("YOUTUBE_COOKIES")
-COOKIES_PATH = "/tmp/cookies.txt"
+def get_direct_url():
+    print("[INFO] Extracting Video URL via yt-dlp...")
+    cmd = [
+        "yt-dlp",
+        "-g",
+        "-f", "best[ext=mp4]/best",
+        "--extractor-args", "youtube:player_client=mweb,tv_embedded",
+        "--no-check-certificates",
+        YOUTUBE_VIDEO_URL
+    ]
+    result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    if result.returncode == 0 and result.stdout.strip():
+        urls = result.stdout.strip().split('\n')
+        return urls[0]
+    else:
+        print(f"[ERROR] yt-dlp failed: {result.stderr.strip()}")
+        return None
 
-if COOKIES_ENV:
-    with open(COOKIES_PATH, "w") as f:
-        f.write(COOKIES_ENV)
-
-YTDLP_CMD = [
-    "yt-dlp",
-    "-f", "b/bv*+ba",
-    "--extractor-args", "youtube:player_client=tv_embedded,android_vr",
-    "--no-check-certificates",
-    "-o", "-",
-    YOUTUBE_VIDEO_URL
-]
-
-if COOKIES_ENV and os.path.exists(COOKIES_PATH):
-    YTDLP_CMD.insert(1, "--cookies")
-    YTDLP_CMD.insert(2, COOKIES_PATH)
-
-FFMPEG_CMD = [
-    "ffmpeg",
-    "-hide_banner",
-    "-loglevel", "warning",
-    "-re",
-    "-i", "pipe:0",
-    "-c:v", "libx264",
-    "-preset", "veryfast",
-    "-maxrate", "3000k",
-    "-bufsize", "6000k",
-    "-pix_fmt", "yuv420p",
-    "-g", "60",
-    "-c:a", "aac",
-    "-b:a", "128k",
-    "-ar", "44100",
-    "-f", "flv",
-    YOUTUBE_RTMP_DESTINATION
-]
-
-ytdlp_process = None
 ffmpeg_process = None
 
-def kill_forcefully(p):
-    if p is not None:
-        try:
-            if p.poll() is None:
-                p.terminate()
-                p.wait(timeout=2)
-        except Exception:
-            try:
-                p.kill()
-            except Exception:
-                pass
-
 def cleanup():
-    global ytdlp_process, ffmpeg_process
-    kill_forcefully(ffmpeg_process)
-    kill_forcefully(ytdlp_process)
-    ytdlp_process = None
+    global ffmpeg_process
+    if ffmpeg_process and ffmpeg_process.poll() is None:
+        try:
+            ffmpeg_process.terminate()
+            ffmpeg_process.wait(timeout=2)
+        except Exception:
+            ffmpeg_process.kill()
     ffmpeg_process = None
 
 def signal_handler(sig, frame):
@@ -76,27 +45,48 @@ def signal_handler(sig, frame):
 signal.signal(signal.SIGINT, signal_handler)
 signal.signal(signal.SIGTERM, signal_handler)
 
-while True:
-    try:
-        ytdlp_process = subprocess.Popen(
-            YTDLP_CMD,
-            stdout=subprocess.PIPE,
-            stderr=sys.stderr
-        )
+print("[INFO] Starting Restreamer Service...")
 
+while True:
+    stream_url = get_direct_url()
+    
+    if not stream_url:
+        print("[WARNING] Could not get stream link. Retrying in 10 seconds...")
+        time.sleep(10)
+        continue
+
+    print("[INFO] Stream URL obtained! Launching FFmpeg...")
+
+    FFMPEG_CMD = [
+        "ffmpeg",
+        "-hide_banner",
+        "-loglevel", "warning",
+        "-re",
+        "-i", stream_url,
+        "-c:v", "libx264",
+        "-preset", "veryfast",
+        "-maxrate", "3000k",
+        "-bufsize", "6000k",
+        "-pix_fmt", "yuv420p",
+        "-g", "60",
+        "-c:a", "aac",
+        "-b:a", "128k",
+        "-ar", "44100",
+        "-f", "flv",
+        YOUTUBE_RTMP_DESTINATION
+    ]
+
+    try:
         ffmpeg_process = subprocess.Popen(
             FFMPEG_CMD,
-            stdin=ytdlp_process.stdout,
             stdout=sys.stdout,
             stderr=sys.stderr
         )
-
-        ytdlp_process.stdout.close()
         ffmpeg_process.wait()
-
-        time.sleep(5)
-
-    except Exception:
-        time.sleep(5)
+    except Exception as e:
+        print(f"[ERROR] FFmpeg exception: {e}")
     finally:
         cleanup()
+
+    print("[INFO] Stream session ended. Restarting in 5 seconds...")
+    time.sleep(5)
