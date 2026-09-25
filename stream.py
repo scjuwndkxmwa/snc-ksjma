@@ -4,101 +4,337 @@ import time
 import signal
 import sys
 
+
+# =========================================================
+# SETTINGS
+# =========================================================
+
 YOUTUBE_VIDEO_URL = "https://youtu.be/mtKF4rn6SLM"
+
 YOUTUBE_STREAM_KEY = "r77y-h37m-x6xr-x0dj-0g6q"
-YOUTUBE_RTMP_DESTINATION = f"rtmp://a.rtmp.youtube.com/live2/{YOUTUBE_STREAM_KEY}"
 
-COOKIES_ENV = os.getenv("YOUTUBE_COOKIES")
-COOKIES_PATH = "/tmp/cookies.txt"
+YOUTUBE_RTMP_DESTINATION = (
+    f"rtmp://a.rtmp.youtube.com/live2/{YOUTUBE_STREAM_KEY}"
+)
 
-if COOKIES_ENV:
-    with open(COOKIES_PATH, "w") as f:
-        f.write(COOKIES_ENV)
 
-def get_direct_url():
-    print("[INFO] Extracting Video URL via yt-dlp...")
+# =========================================================
+# GET DIRECT VIDEO + AUDIO URL
+# =========================================================
+
+def get_direct_urls():
+
+    print("[INFO] Extracting YouTube media URLs via yt-dlp...")
+
     cmd = [
         "yt-dlp",
         "-g",
-        "-f", "best[ext=mp4]/best",
+
+        "-f",
+        "bestvideo[vcodec^=avc1]+bestaudio[acodec^=mp4a]/best[vcodec^=avc1][acodec^=mp4a]",
+
         "--no-check-certificates",
+
+        "--extractor-args",
+        "youtube:player_client=android,web",
+
         YOUTUBE_VIDEO_URL
     ]
-    
-    if os.path.exists(COOKIES_PATH):
-        cmd.extend(["--cookies", COOKIES_PATH])
-    else:
-        cmd.extend(["--extractor-args", "youtube:player_client=ios,android,mweb"])
 
-    result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-    if result.returncode == 0 and result.stdout.strip():
-        urls = result.stdout.strip().split('\n')
-        return urls[0]
-    else:
-        print(f"[ERROR] yt-dlp failed: {result.stderr.strip()}")
+    result = subprocess.run(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True
+    )
+
+    if result.returncode != 0:
+
+        print("[ERROR] yt-dlp failed:")
+        print(result.stderr.strip())
+
         return None
+
+    urls = [
+        line.strip()
+        for line in result.stdout.splitlines()
+        if line.strip()
+    ]
+
+    if len(urls) >= 2:
+
+        print(
+            "[INFO] Separate video and audio streams found."
+        )
+
+        return urls[0], urls[1]
+
+    if len(urls) == 1:
+
+        print(
+            "[INFO] Combined media stream found."
+        )
+
+        return urls[0], None
+
+    print(
+        "[ERROR] yt-dlp returned no media URLs."
+    )
+
+    return None
+
+
+# =========================================================
+# PROCESS
+# =========================================================
 
 ffmpeg_process = None
 
+
 def cleanup():
+
     global ffmpeg_process
+
     if ffmpeg_process and ffmpeg_process.poll() is None:
+
+        print("[SYSTEM] Stopping FFmpeg...")
+
         try:
             ffmpeg_process.terminate()
-            ffmpeg_process.wait(timeout=2)
+            ffmpeg_process.wait(timeout=5)
+
         except Exception:
-            ffmpeg_process.kill()
+
+            try:
+                ffmpeg_process.kill()
+                ffmpeg_process.wait(timeout=3)
+            except Exception:
+                pass
+
     ffmpeg_process = None
 
+
+# =========================================================
+# SIGNAL HANDLER
+# =========================================================
+
 def signal_handler(sig, frame):
+
+    print(
+        "\n[SYSTEM] Shutdown signal received."
+    )
+
     cleanup()
+
     sys.exit(0)
+
 
 signal.signal(signal.SIGINT, signal_handler)
 signal.signal(signal.SIGTERM, signal_handler)
 
-print("[INFO] Starting Restreamer Service...")
+
+# =========================================================
+# START
+# =========================================================
+
+print("========================================")
+print("YouTube Video → YouTube Live Restreamer")
+print("========================================")
+print(f"Source: {YOUTUBE_VIDEO_URL}")
+print("Video: COPY")
+print("Audio: AAC")
+print("========================================\n")
+
+
+# =========================================================
+# MAIN LOOP
+# =========================================================
 
 while True:
-    stream_url = get_direct_url()
-    
-    if not stream_url:
-        print("[WARNING] Could not get stream link. Retrying in 10 seconds...")
-        time.sleep(10)
-        continue
-
-    print("[INFO] Stream URL obtained! Launching FFmpeg...")
-
-    FFMPEG_CMD = [
-        "ffmpeg",
-        "-hide_banner",
-        "-loglevel", "warning",
-        "-re",
-        "-i", stream_url,
-        "-c:v", "libx264",
-        "-preset", "veryfast",
-        "-maxrate", "3000k",
-        "-bufsize", "6000k",
-        "-pix_fmt", "yuv420p",
-        "-g", "60",
-        "-c:a", "aac",
-        "-b:a", "128k",
-        "-ar", "44100",
-        "-f", "flv",
-        YOUTUBE_RTMP_DESTINATION
-    ]
 
     try:
+
+        cleanup()
+
+        media = get_direct_urls()
+
+        if not media:
+
+            print(
+                "[WARNING] Could not get media URLs."
+            )
+
+            print(
+                "[INFO] Retrying in 15 seconds..."
+            )
+
+            time.sleep(15)
+
+            continue
+
+        video_url, audio_url = media
+
+        if audio_url:
+
+            print(
+                "[INFO] Starting FFmpeg with separate "
+                "video/audio streams..."
+            )
+
+            FFMPEG_CMD = [
+
+                "ffmpeg",
+
+                "-hide_banner",
+                "-loglevel", "warning",
+                "-stats",
+
+                "-re",
+
+                "-i",
+                video_url,
+
+                "-i",
+                audio_url,
+
+                "-fflags",
+                "+genpts+discardcorrupt",
+
+                "-map",
+                "0:v:0",
+
+                "-map",
+                "1:a:0?",
+
+                "-c:v",
+                "copy",
+
+                "-c:a",
+                "aac",
+
+                "-b:a",
+                "128k",
+
+                "-ar",
+                "44100",
+
+                "-ac",
+                "2",
+
+                "-af",
+                "aresample=async=1000:min_hard_comp=0.100000:first_pts=0",
+
+                "-fps_mode",
+                "passthrough",
+
+                "-flush_packets",
+                "1",
+
+                "-flvflags",
+                "no_duration_filesize",
+
+                "-f",
+                "flv",
+
+                YOUTUBE_RTMP_DESTINATION
+            ]
+
+        else:
+
+            print(
+                "[INFO] Starting FFmpeg with combined media..."
+            )
+
+            FFMPEG_CMD = [
+
+                "ffmpeg",
+
+                "-hide_banner",
+                "-loglevel", "warning",
+                "-stats",
+
+                "-re",
+
+                "-fflags",
+                "+genpts+discardcorrupt",
+
+                "-i",
+                video_url,
+
+                "-map",
+                "0:v:0",
+
+                "-map",
+                "0:a:0?",
+
+                "-c:v",
+                "copy",
+
+                "-c:a",
+                "aac",
+
+                "-b:a",
+                "128k",
+
+                "-ar",
+                "44100",
+
+                "-ac",
+                "2",
+
+                "-af",
+                "aresample=async=1000:min_hard_comp=0.100000:first_pts=0",
+
+                "-fps_mode",
+                "passthrough",
+
+                "-flush_packets",
+                "1",
+
+                "-flvflags",
+                "no_duration_filesize",
+
+                "-f",
+                "flv",
+
+                YOUTUBE_RTMP_DESTINATION
+            ]
+
         ffmpeg_process = subprocess.Popen(
             FFMPEG_CMD,
             stdout=sys.stdout,
             stderr=sys.stderr
         )
-        ffmpeg_process.wait()
-    except Exception as e:
-        print(f"[ERROR] FFmpeg exception: {e}")
-    finally:
+
+        return_code = ffmpeg_process.wait()
+
+        print(
+            f"\n[INFO] FFmpeg ended "
+            f"(exit code: {return_code})."
+        )
+
+    except KeyboardInterrupt:
+
+        print(
+            "\n[SYSTEM] Stopping..."
+        )
+
         cleanup()
 
-    print("[INFO] Stream session ended. Restarting in 5 seconds...")
+        break
+
+    except Exception as e:
+
+        print(
+            f"\n[ERROR] {e}"
+        )
+
+    finally:
+
+        cleanup()
+
+    print(
+        "[INFO] Restarting media session in 5 seconds..."
+    )
+
     time.sleep(5)
