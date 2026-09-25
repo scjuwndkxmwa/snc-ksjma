@@ -1,2 +1,2 @@
+yt-dlp
 urllib3<2.0.0
-streamlink
