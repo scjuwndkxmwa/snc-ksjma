@@ -10,11 +10,12 @@ YOUTUBE_STREAM_KEY = "r77y-h37m-x6xr-x0dj-0g6q"
 YOUTUBE_RTMP_DESTINATION = f"rtmp://a.rtmp.youtube.com/live2/{YOUTUBE_STREAM_KEY}"
 
 def get_stream_urls(video_url):
-    print("[INFO] Extracting Video & Audio URLs via yt-dlp...")
+    print("[INFO] Extracting Video & Audio URLs via yt-dlp (Android Client)...")
     cmd = [
         "yt-dlp",
         "-g",
         "-f", "bv*+ba/b",
+        "--extractor-args", "youtube:player_client=android",
         "--no-check-certificates",
         video_url
     ]
