@@ -6,17 +6,27 @@ import sys
 
 YOUTUBE_VIDEO_URL = "https://youtu.be/mtKF4rn6SLM"
 YOUTUBE_STREAM_KEY = "r77y-h37m-x6xr-x0dj-0g6q"
-
 YOUTUBE_RTMP_DESTINATION = f"rtmp://a.rtmp.youtube.com/live2/{YOUTUBE_STREAM_KEY}"
+
+COOKIES_ENV = os.getenv("YOUTUBE_COOKIES")
+COOKIES_PATH = "/tmp/cookies.txt"
+
+if COOKIES_ENV:
+    with open(COOKIES_PATH, "w") as f:
+        f.write(COOKIES_ENV)
 
 YTDLP_CMD = [
     "yt-dlp",
     "-f", "b/bv*+ba",
-    "--extractor-args", "youtube:player_client=mweb,tv",
+    "--extractor-args", "youtube:player_client=tv_embedded,android_vr",
     "--no-check-certificates",
     "-o", "-",
     YOUTUBE_VIDEO_URL
 ]
+
+if COOKIES_ENV and os.path.exists(COOKIES_PATH):
+    YTDLP_CMD.insert(1, "--cookies")
+    YTDLP_CMD.insert(2, COOKIES_PATH)
 
 FFMPEG_CMD = [
     "ffmpeg",
@@ -66,8 +76,6 @@ def signal_handler(sig, frame):
 signal.signal(signal.SIGINT, signal_handler)
 signal.signal(signal.SIGTERM, signal_handler)
 
-print("[INFO] Starting continuous restream loop...")
-
 while True:
     try:
         ytdlp_process = subprocess.Popen(
@@ -86,11 +94,9 @@ while True:
         ytdlp_process.stdout.close()
         ffmpeg_process.wait()
 
-        print("[INFO] Stream ended or restarted. Re-linking in 5 seconds...")
         time.sleep(5)
 
-    except Exception as e:
-        print(f"[ERROR] Loop error: {e}")
+    except Exception:
         time.sleep(5)
     finally:
         cleanup()
