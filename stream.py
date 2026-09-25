@@ -21,12 +21,18 @@ STREAMLINK_CMD = [
 FFMPEG_CMD = [
     "ffmpeg",
     "-hide_banner",
-    "-loglevel", "warning",
-    "-stats",
+    "-loglevel", "info",
     "-thread_queue_size", "512",
     "-i", "-",
-    "-c:v", "copy",
-    "-c:a", "copy",
+    "-c:v", "libx264",
+    "-preset", "veryfast",
+    "-maxrate", "3000k",
+    "-bufsize", "6000k",
+    "-pix_fmt", "yuv420p",
+    "-g", "60",
+    "-c:a", "aac",
+    "-b:a", "128k",
+    "-ar", "44100",
     "-f", "flv",
     YOUTUBE_RTMP_DESTINATION
 ]
@@ -61,30 +67,33 @@ signal.signal(signal.SIGINT, signal_handler)
 signal.signal(signal.SIGTERM, signal_handler)
 
 try:
+    print("[INFO] Starting Streamlink...")
     streamlink_process = subprocess.Popen(
         STREAMLINK_CMD,
         stdout=subprocess.PIPE,
-        stderr=subprocess.DEVNULL,
+        stderr=sys.stderr,
         bufsize=0
     )
 
     time.sleep(3)
 
     if streamlink_process.poll() is not None:
+        print("[ERROR] Streamlink failed to start.")
         sys.exit(1)
 
+    print("[INFO] Starting FFmpeg...")
     ffmpeg_process = subprocess.Popen(
         FFMPEG_CMD,
         stdin=streamlink_process.stdout,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
+        stdout=sys.stdout,
+        stderr=sys.stderr,
         bufsize=0
     )
 
     streamlink_process.stdout.close()
     ffmpeg_process.wait()
 
-except Exception:
-    pass
+except Exception as e:
+    print(f"[ERROR] Exception: {e}")
 finally:
     cleanup()
