@@ -8,16 +8,27 @@ YOUTUBE_VIDEO_URL = "https://youtu.be/mtKF4rn6SLM"
 YOUTUBE_STREAM_KEY = "r77y-h37m-x6xr-x0dj-0g6q"
 YOUTUBE_RTMP_DESTINATION = f"rtmp://a.rtmp.youtube.com/live2/{YOUTUBE_STREAM_KEY}"
 
+COOKIES_ENV = os.getenv("YOUTUBE_COOKIES")
+COOKIES_PATH = "/tmp/cookies.txt"
+
+if COOKIES_ENV:
+    with open(COOKIES_PATH, "w") as f:
+        f.write(COOKIES_ENV)
+
 def get_direct_url():
     print("[INFO] Extracting Video URL via yt-dlp...")
     cmd = [
         "yt-dlp",
         "-g",
         "-f", "best[ext=mp4]/best",
-        "--extractor-args", "youtube:player_client=mweb,tv_embedded",
+        "--extractor-args", "youtube:player_client=ios,mweb,android",
         "--no-check-certificates",
         YOUTUBE_VIDEO_URL
     ]
+    
+    if COOKIES_ENV and os.path.exists(COOKIES_PATH):
+        cmd.extend(["--cookies", COOKIES_PATH])
+
     result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     if result.returncode == 0 and result.stdout.strip():
         urls = result.stdout.strip().split('\n')
