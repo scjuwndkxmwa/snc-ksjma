@@ -9,8 +9,8 @@ import sys
 # CONFIG
 # =========================================================
 
-YOUTUBE_URL = "https://www.youtube.com/@Yasseraldosry/live"
-YOUTUBE_CHANNEL = "@Yasseraldosry"
+YOUTUBE_URL = "https://www.youtube.com/@dailyquranrecitation246/live"
+YOUTUBE_CHANNEL = "@dailyquranrecitation246"
 
 RESTREAM_RTMP = "rtmp://live.restream.io/live"
 RESTREAM_STREAM_KEY = "re_12012590_event333a4548cabc4367b4154e3ccbd1a7f9"
