@@ -19,6 +19,7 @@ elif os.getenv("YOUTUBE_COOKIES"):
         f.write(os.getenv("YOUTUBE_COOKIES"))
 
 def get_streamlink_url():
+    print("[+] Extracting YouTube stream URL...", flush=True)
     cmd = [
         "streamlink",
         "--stream-url",
@@ -32,7 +33,9 @@ def get_streamlink_url():
     result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     if result.returncode == 0 and result.stdout.strip():
         return result.stdout.strip()
-    return None
+    else:
+        print(f"[-] Streamlink failed: {result.stderr.strip()}", flush=True)
+        return None
 
 ffmpeg_process = None
 
@@ -53,11 +56,16 @@ def signal_handler(sig, frame):
 signal.signal(signal.SIGINT, signal_handler)
 signal.signal(signal.SIGTERM, signal_handler)
 
+print("[+] Script initialized and running...", flush=True)
+
 while True:
     stream_url = get_streamlink_url()
     if not stream_url:
+        print("[-] Retrying streamlink extraction in 10 seconds...", flush=True)
         time.sleep(10)
         continue
+
+    print("[+] Stream URL obtained. Launching FFmpeg to Restream...", flush=True)
 
     FFMPEG_CMD = [
         "ffmpeg",
@@ -74,8 +82,9 @@ while True:
     try:
         ffmpeg_process = subprocess.Popen(FFMPEG_CMD, stdout=sys.stdout, stderr=sys.stderr)
         ffmpeg_process.wait()
-    except Exception:
-        pass
+        print("[-] FFmpeg process exited.", flush=True)
+    except Exception as e:
+        print(f"[-] FFmpeg error: {e}", flush=True)
     finally:
         cleanup()
 
