@@ -4,31 +4,18 @@ import time
 import signal
 import sys
 
-YOUTUBE_VIDEO_URL = "https://www.youtube.com/live/9dqd0faQMwU"
+YOUTUBE_CHANNEL_URL = "https://www.youtube.com/@Yasseraldosry/live"
 RESTREAM_KEY = os.getenv("RESTREAM_KEY", "re_12012590_event333a4548cabc4367b4154e3ccbd1a7f9")
 RESTREAM_RTMP_DESTINATION = f"rtmp://live.restream.io/live/{RESTREAM_KEY}"
 
-COOKIES_PATH = None
-if os.path.exists("YOUTUBE_COOKIES"):
-    COOKIES_PATH = "YOUTUBE_COOKIES"
-elif os.path.exists("cookies.txt"):
-    COOKIES_PATH = "cookies.txt"
-elif os.getenv("YOUTUBE_COOKIES"):
-    COOKIES_PATH = "/tmp/cookies.txt"
-    with open(COOKIES_PATH, "w") as f:
-        f.write(os.getenv("YOUTUBE_COOKIES"))
-
 def get_streamlink_url():
-    print("[+] Extracting YouTube stream URL...", flush=True)
+    print("[+] Extracting stream URL from channel...", flush=True)
     cmd = [
         "streamlink",
         "--stream-url",
-        YOUTUBE_VIDEO_URL,
+        YOUTUBE_CHANNEL_URL,
         "best,720p,480p,worst"
     ]
-    
-    if COOKIES_PATH:
-        cmd.extend(["--http-cookies", COOKIES_PATH])
 
     result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     if result.returncode == 0 and result.stdout.strip():
@@ -61,7 +48,7 @@ print("[+] Script initialized and running...", flush=True)
 while True:
     stream_url = get_streamlink_url()
     if not stream_url:
-        print("[-] Retrying streamlink extraction in 10 seconds...", flush=True)
+        print("[-] Retrying channel stream extraction in 10 seconds...", flush=True)
         time.sleep(10)
         continue
 
