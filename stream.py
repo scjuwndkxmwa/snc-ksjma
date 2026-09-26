@@ -29,12 +29,15 @@ STREAMLINK_CMD = [
     "--hls-live-edge", "2",
     "--ringbuffer-size", "512M",
 
+    # Keep looking for the YouTube LIVE indefinitely
     "--retry-streams", "5",
-    "--retry-max", "10",
+    "--retry-max", "0",
+
+    # Retry opening the actual stream
+    "--retry-open", "5",
 
     "--stream-segment-attempts", "5",
     "--stream-segment-timeout", "15",
-    "--stream-timeout", "30",
 
     "--stdout",
 
@@ -62,9 +65,11 @@ FFMPEG_CMD = [
     "-i", "-",
 
     # VIDEO
-    # No video re-encoding
+    # COPY - NO VIDEO ENCODING
     "-map", "0:v:0",
     "-c:v", "copy",
+
+    # Preserve source timing
     "-fps_mode", "passthrough",
 
     # AUDIO
@@ -123,6 +128,7 @@ def stop_process(process, name="process"):
         try:
             process.kill()
             process.wait(timeout=3)
+
         except Exception:
             pass
 
@@ -188,6 +194,7 @@ print("Resize      : OFF")
 print("FPS Convert : OFF")
 print("Audio       : AAC 128k")
 print("Destination : Restream")
+print("Auto Detect : ON")
 print("Status      : RUNNING")
 print("==============================================\n")
 
@@ -204,7 +211,11 @@ while not stopping:
 
         print(
             f"\n[{time.strftime('%Y-%m-%d %H:%M:%S')}] "
-            "Checking YouTube LIVE..."
+            "Starting YouTube monitor..."
+        )
+
+        print(
+            "[SYSTEM] Waiting for an actual YouTube LIVE stream..."
         )
 
         # -------------------------------------------------
@@ -218,47 +229,12 @@ while not stopping:
             bufsize=0
         )
 
-        # Give Streamlink time to detect LIVE
-        time.sleep(3)
-
         # -------------------------------------------------
-        # YOUTUBE OFFLINE
-        # -------------------------------------------------
-
-        if streamlink_process.poll() is not None:
-
-            print(
-                f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] "
-                "YouTube is OFFLINE."
-            )
-
-            cleanup()
-
-            print(
-                f"[SYSTEM] Checking again in "
-                f"{CHECK_INTERVAL_OFFLINE} seconds..."
-            )
-
-            time.sleep(CHECK_INTERVAL_OFFLINE)
-
-            continue
-
-        # -------------------------------------------------
-        # YOUTUBE ONLINE
-        # -------------------------------------------------
-
-        print(
-            f"\n[{time.strftime('%Y-%m-%d %H:%M:%S')}] "
-            "YouTube LIVE detected!"
-        )
-
-        print("[SYSTEM] Starting FFmpeg...")
-        print("[SYSTEM] Sending stream to Restream...")
-        print("[SYSTEM] Video: COPY")
-        print("[SYSTEM] Audio: AAC 128k\n")
-
-        # -------------------------------------------------
-        # START FFMPEG
+        # START FFMPEG IMMEDIATELY
+        #
+        # FFmpeg will wait for Streamlink's stdout.
+        # We DO NOT assume that Streamlink being alive
+        # means that a playable stream exists.
         # -------------------------------------------------
 
         ffmpeg_process = subprocess.Popen(
@@ -269,11 +245,15 @@ while not stopping:
             bufsize=0
         )
 
-        # Close parent's copy of pipe
+        # Close parent's copy of the pipe
         streamlink_process.stdout.close()
 
+        print("[SYSTEM] FFmpeg started.")
+        print("[SYSTEM] Waiting for YouTube stream data...\n")
+
+
         # -------------------------------------------------
-        # MONITOR BOTH PROCESSES
+        # MONITOR
         # -------------------------------------------------
 
         while not stopping:
@@ -305,11 +285,13 @@ while not stopping:
 
             time.sleep(1)
 
+
         if stopping:
             break
 
+
         # -------------------------------------------------
-        # STREAM ENDED
+        # CURRENT SESSION ENDED
         # -------------------------------------------------
 
         print("\n==============================================")
@@ -321,34 +303,47 @@ while not stopping:
 
         print(
             f"[SYSTEM] Waiting {COOLDOWN_AFTER_END} seconds "
-            "before checking for the next LIVE..."
+            "before starting the next monitoring cycle..."
         )
 
         time.sleep(COOLDOWN_AFTER_END)
 
+
     except KeyboardInterrupt:
 
         stopping = True
+
         cleanup()
+
         break
+
 
     except BrokenPipeError:
 
         print("\n[ERROR] Broken pipe detected.")
+
         cleanup()
+
         time.sleep(5)
+
 
     except OSError as e:
 
         print(f"\n[ERROR] OS error: {e}")
+
         cleanup()
+
         time.sleep(10)
+
 
     except Exception as e:
 
         print(f"\n[ERROR] Unexpected error: {e}")
+
         cleanup()
+
         time.sleep(10)
+
 
     finally:
 
