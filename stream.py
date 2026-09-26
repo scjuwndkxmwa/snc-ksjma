@@ -10,7 +10,7 @@ import sys
 # =========================================================
 
 # YouTube LIVE source
-YOUTUBE_URL = "https://www.youtube.com/watch?v=Dkhgp_G81GQ"
+YOUTUBE_URL = "https://www.youtube.com/live/7DHNbnPMNiM"
 
 # Restream destination
 RESTREAM_RTMP = os.environ.get(
