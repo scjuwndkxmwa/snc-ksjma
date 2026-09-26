@@ -6,7 +6,7 @@ import subprocess
 
 
 # ============================================================
-# CONFIGURATION
+# CONFIG
 # ============================================================
 
 YOUTUBE_URL = "https://www.youtube.com/live/7DHNbnPMNiM"
@@ -14,59 +14,47 @@ YOUTUBE_URL = "https://www.youtube.com/live/7DHNbnPMNiM"
 # Restream stream key
 RESTREAM_STREAM_KEY = "re_12012590_event333a4548cabc4367b4154e3ccbd1a7f9"
 
-# Restream ingest
-RESTREAM_RTMP = f"rtmp://live.restream.io/live/{RESTREAM_STREAM_KEY}"
+# Restream official RTMP ingest
+RESTREAM_RTMP = (
+    f"rtmp://live.restream.io/live/{RESTREAM_STREAM_KEY}"
+)
 
+QUALITY = "best"
 
-# ============================================================
-# RELAY SETTINGS
-# ============================================================
+RECONNECT_DELAY = 5
 
-RESTART_DELAY = 5
+# Streamlink stability
+RETRY_STREAMS_DELAY = 10
+RETRY_MAX = 0
 
-# Streamlink quality
-STREAM_QUALITY = "best"
-
-# Keep a small amount of latency while avoiding excessive RAM use
 RINGBUFFER_SIZE = "64M"
 
-# HLS settings
-HLS_LIVE_EDGE = "3"
+SEGMENT_ATTEMPTS = 8
+SEGMENT_THREADS = 2
+SEGMENT_TIMEOUT = 15
 
-# Segment retry settings
-SEGMENT_ATTEMPTS = "10"
-SEGMENT_TIMEOUT = "20"
+STREAM_TIMEOUT = 60
 
-# Stream read timeout
-STREAM_TIMEOUT = "60"
-
-# Playlist reload attempts
-PLAYLIST_RELOAD_ATTEMPTS = "10"
+# Audio
+AUDIO_BITRATE = "128k"
+AUDIO_RATE = "44100"
+AUDIO_CHANNELS = "2"
 
 
 # ============================================================
-# GLOBAL PROCESSES
+# PROCESS CONTROL
 # ============================================================
 
 streamlink_process = None
 ffmpeg_process = None
+stopping = False
 
-shutdown_requested = False
-
-
-# ============================================================
-# LOGGING
-# ============================================================
 
 def log(message):
     print(message, flush=True)
 
 
-# ============================================================
-# PROCESS CLEANUP
-# ============================================================
-
-def stop_process(process, name, timeout=5):
+def stop_process(process, name):
     if process is None:
         return
 
@@ -80,7 +68,7 @@ def stop_process(process, name, timeout=5):
                 pass
 
             try:
-                process.wait(timeout=timeout)
+                process.wait(timeout=5)
             except subprocess.TimeoutExpired:
                 log(f"[SYSTEM] Killing {name}...")
 
@@ -109,148 +97,122 @@ def stop_all():
     streamlink_process = None
 
 
-# ============================================================
-# SIGNAL HANDLING
-# ============================================================
+def shutdown(signum=None, frame=None):
+    global stopping
 
-def handle_signal(signum, frame):
-    global shutdown_requested
-
-    if shutdown_requested:
+    if stopping:
         return
 
-    shutdown_requested = True
+    stopping = True
 
     log("")
     log("[SYSTEM] Shutdown requested...")
+
     stop_all()
 
+    log("[SYSTEM] Shutdown complete.")
     sys.exit(0)
 
 
-signal.signal(signal.SIGTERM, handle_signal)
-signal.signal(signal.SIGINT, handle_signal)
+signal.signal(signal.SIGTERM, shutdown)
+signal.signal(signal.SIGINT, shutdown)
 
 
 # ============================================================
-# START STREAMLINK
+# DISPLAY
 # ============================================================
 
-def start_streamlink():
+def print_header():
+    log("============================================================")
+    log("       YouTube 24/7 -> Restream -> TikTok")
+    log("============================================================")
+    log(f"YouTube        : {YOUTUBE_URL}")
+    log("Destination    : Restream")
+    log("Cookies        : OFF")
+    log("Video          : COPY")
+    log("Video Encode   : OFF")
+    log("Crop           : OFF")
+    log("Resize         : OFF")
+    log("FPS Convert    : OFF")
+    log(f"Audio          : AAC {AUDIO_BITRATE}")
+    log("Auto-Reconnect : ON")
+    log("Status         : STARTING")
+    log("============================================================")
 
-    cmd = [
+
+# ============================================================
+# STREAMLINK
+# ============================================================
+
+def build_streamlink_command():
+
+    command = [
         "streamlink",
 
-        "--no-version-check",
+        # Do NOT use --no-version-check.
+        # Modern Streamlink already has automatic version
+        # checking disabled by default.
 
-        # YouTube
-        YOUTUBE_URL,
+        "--loglevel",
+        "info",
 
-        # Quality
-        STREAM_QUALITY,
-
-        # Output raw stream to stdout
-        "--stdout",
-
-        # HLS latency
-        "--hls-live-edge",
-        HLS_LIVE_EDGE,
-
-        # Buffer
-        "--ringbuffer-size",
-        RINGBUFFER_SIZE,
-
-        # Keep searching for the live stream
         "--retry-streams",
-        "10",
+        str(RETRY_STREAMS_DELAY),
 
-        # 0 = unlimited retries
         "--retry-max",
-        "0",
+        str(RETRY_MAX),
 
-        # Retry opening stream
         "--retry-open",
         "5",
 
-        # Segment reliability
+        "--ringbuffer-size",
+        RINGBUFFER_SIZE,
+
         "--stream-segment-attempts",
-        SEGMENT_ATTEMPTS,
+        str(SEGMENT_ATTEMPTS),
+
+        "--stream-segment-threads",
+        str(SEGMENT_THREADS),
 
         "--stream-segment-timeout",
-        SEGMENT_TIMEOUT,
+        str(SEGMENT_TIMEOUT),
 
-        # Stream timeout
         "--stream-timeout",
-        STREAM_TIMEOUT,
+        str(STREAM_TIMEOUT),
 
-        # HLS playlist recovery
+        "--hls-live-edge",
+        "3",
+
         "--hls-playlist-reload-attempts",
-        PLAYLIST_RELOAD_ATTEMPTS,
+        "5",
 
-        # HTTP timeout
-        "--http-timeout",
-        "30",
+        "--stdout",
 
-        # Segment download threads
-        "--stream-segment-threads",
-        "2",
+        YOUTUBE_URL,
+
+        QUALITY,
     ]
 
-    log("[SYSTEM] Starting Streamlink...")
-    log("[SYSTEM] Cookies: OFF")
-    log("[SYSTEM] Quality: BEST")
-    log("[SYSTEM] Video source will be copied.")
-    log("[SYSTEM] Waiting for YouTube stream data...")
-
-    try:
-        process = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=None,
-            stdin=subprocess.DEVNULL,
-            bufsize=0,
-        )
-
-        return process
-
-    except Exception as e:
-        log(f"[ERROR] Could not start Streamlink: {e}")
-        return None
+    return command
 
 
 # ============================================================
-# START FFMPEG
+# FFMPEG
 # ============================================================
 
-def start_ffmpeg(streamlink):
+def build_ffmpeg_command():
 
-    log("[SYSTEM] Starting FFmpeg...")
-    log("[SYSTEM] Video: COPY")
-    log("[SYSTEM] Video Encode: OFF")
-    log("[SYSTEM] Audio: AAC 128k")
-    log("[SYSTEM] Sending stream to Restream...")
-
-    cmd = [
+    command = [
         "ffmpeg",
 
-        # ----------------------------------------------------
-        # INPUT
-        # ----------------------------------------------------
-
         "-hide_banner",
+
         "-loglevel",
         "warning",
+
         "-stats",
 
-        "-thread_queue_size",
-        "1024",
-
-        "-fflags",
-        "+genpts+discardcorrupt",
-
-        "-err_detect",
-        "ignore_err",
-
+        # Read from Streamlink stdin
         "-i",
         "-",
 
@@ -264,14 +226,6 @@ def start_ffmpeg(streamlink):
         "-c:v",
         "copy",
 
-        # Helps stream-copy timestamp handling
-        "-copytb",
-        "1",
-
-        # Don't force FPS conversion
-        "-fps_mode",
-        "passthrough",
-
         # ----------------------------------------------------
         # AUDIO
         # ----------------------------------------------------
@@ -283,34 +237,34 @@ def start_ffmpeg(streamlink):
         "aac",
 
         "-b:a",
-        "128k",
+        AUDIO_BITRATE,
 
         "-ar",
-        "44100",
+        AUDIO_RATE,
 
         "-ac",
-        "2",
+        AUDIO_CHANNELS,
 
-        # Keep audio timestamps under control
+        # Helps keep audio timestamps sane
         "-af",
-        "aresample=async=1000:min_hard_comp=0.100000:first_pts=0",
+        "aresample=async=1000:min_hard_comp=0.100:first_pts=0",
 
         # ----------------------------------------------------
-        # TIMESTAMP / MUXING
+        # TIMESTAMP / CORRUPTED PACKETS
         # ----------------------------------------------------
+
+        "-fflags",
+        "+genpts+discardcorrupt",
+
+        "-err_detect",
+        "ignore_err",
 
         "-avoid_negative_ts",
         "make_zero",
 
-        "-max_interleave_delta",
-        "0",
-
         # ----------------------------------------------------
-        # FLV / RTMP
+        # OUTPUT
         # ----------------------------------------------------
-
-        "-flvflags",
-        "no_duration_filesize",
 
         "-f",
         "flv",
@@ -318,220 +272,202 @@ def start_ffmpeg(streamlink):
         RESTREAM_RTMP,
     ]
 
-    try:
-        process = subprocess.Popen(
-            cmd,
-            stdin=streamlink.stdout,
-            stdout=subprocess.DEVNULL,
-            stderr=None,
-            bufsize=0,
-        )
-
-        # Parent no longer needs its duplicate stdout handle
-        if streamlink.stdout:
-            streamlink.stdout.close()
-
-        return process
-
-    except Exception as e:
-        log(f"[ERROR] Could not start FFmpeg: {e}")
-        return None
+    return command
 
 
 # ============================================================
-# START ONE RELAY SESSION
+# START SESSION
 # ============================================================
 
-def run_session():
+def start_session():
 
     global streamlink_process
     global ffmpeg_process
 
-    log("")
+    stop_all()
+
     log("============================================================")
     log("[SYSTEM] Starting relay session")
     log("============================================================")
 
     # --------------------------------------------------------
-    # Start Streamlink
+    # START STREAMLINK
     # --------------------------------------------------------
 
-    streamlink_process = start_streamlink()
+    streamlink_cmd = build_streamlink_command()
 
-    if streamlink_process is None:
+    log("[SYSTEM] Starting Streamlink...")
+    log("[SYSTEM] Cookies: OFF")
+    log(f"[SYSTEM] Quality: {QUALITY.upper()}")
+    log("[SYSTEM] Video source will be copied.")
+    log("[SYSTEM] Waiting for YouTube stream data...")
+
+    streamlink_process = subprocess.Popen(
+        streamlink_cmd,
+        stdout=subprocess.PIPE,
+        stderr=None,
+        bufsize=0,
+    )
+
+    time.sleep(1)
+
+    if streamlink_process.poll() is not None:
+        code = streamlink_process.returncode
+
+        log(
+            f"[SYSTEM] Streamlink exited immediately "
+            f"(exit code: {code})."
+        )
+
         return False
 
-    # --------------------------------------------------------
-    # Give Streamlink a moment to initialize
-    # --------------------------------------------------------
-
-    start_wait = time.time()
-
-    while not shutdown_requested:
-
-        if streamlink_process.poll() is not None:
-            code = streamlink_process.returncode
-
-            log(
-                f"[SYSTEM] Streamlink stopped before FFmpeg "
-                f"(exit code: {code})"
-            )
-
-            stop_all()
-            return False
-
-        # As soon as Streamlink has started producing output,
-        # FFmpeg can consume it.
-        if streamlink_process.stdout is not None:
-            break
-
-        if time.time() - start_wait > 30:
-            log("[SYSTEM] Streamlink startup timeout.")
-            stop_all()
-            return False
-
-        time.sleep(0.2)
-
     log("[SYSTEM] Streamlink process is alive.")
+
+    # --------------------------------------------------------
+    # START FFMPEG
+    # --------------------------------------------------------
+
+    ffmpeg_cmd = build_ffmpeg_command()
+
     log("[SYSTEM] Starting FFmpeg pipeline...")
+    log("[SYSTEM] Starting FFmpeg...")
+    log("[SYSTEM] Video: COPY")
+    log("[SYSTEM] Video Encode: OFF")
+    log(f"[SYSTEM] Audio: AAC {AUDIO_BITRATE}")
+    log("[SYSTEM] Sending stream to Restream...")
 
-    # --------------------------------------------------------
-    # Start FFmpeg
-    # --------------------------------------------------------
+    ffmpeg_process = subprocess.Popen(
+        ffmpeg_cmd,
+        stdin=streamlink_process.stdout,
+        stdout=subprocess.DEVNULL,
+        stderr=None,
+        bufsize=0,
+    )
 
-    ffmpeg_process = start_ffmpeg(streamlink_process)
+    # Important:
+    # Once stdout is handed to FFmpeg, Streamlink must not keep
+    # another reference to it in Python.
+    if streamlink_process.stdout:
+        streamlink_process.stdout.close()
 
-    if ffmpeg_process is None:
+    time.sleep(2)
+
+    if ffmpeg_process.poll() is not None:
+        code = ffmpeg_process.returncode
+
+        log(
+            f"[SYSTEM] FFmpeg stopped immediately "
+            f"(exit code: {code})."
+        )
+
         stop_all()
         return False
 
     log("[SYSTEM] Stream is RUNNING.")
-    log("[SYSTEM] Video: COPY")
-    log("[SYSTEM] Audio: AAC 128k")
-    log("[SYSTEM] Auto-Reconnect: ON")
 
-    # --------------------------------------------------------
-    # Monitor both processes
-    # --------------------------------------------------------
-
-    while not shutdown_requested:
-
-        streamlink_code = streamlink_process.poll()
-        ffmpeg_code = ffmpeg_process.poll()
-
-        # FFmpeg stopped
-        if ffmpeg_code is not None:
-
-            log("")
-            log(
-                f"[SYSTEM] FFmpeg stopped "
-                f"(exit code: {ffmpeg_code})."
-            )
-
-            if streamlink_code is None:
-                log(
-                    "[SYSTEM] Streamlink is still running, "
-                    "stopping it before reconnect."
-                )
-
-            stop_all()
-
-            return False
-
-        # Streamlink stopped
-        if streamlink_code is not None:
-
-            log("")
-            log(
-                f"[SYSTEM] Streamlink stopped "
-                f"(exit code: {streamlink_code})."
-            )
-
-            log(
-                "[SYSTEM] YouTube/HLS connection ended "
-                "or encountered a recoverable error."
-            )
-
-            log(
-                "[SYSTEM] Recreating Streamlink + FFmpeg session..."
-            )
-
-            stop_all()
-
-            return False
-
-        time.sleep(1)
-
-    stop_all()
-    return False
+    return True
 
 
 # ============================================================
-# MAIN RELAY LOOP
+# MAIN LOOP
 # ============================================================
 
 def main():
 
-    log("============================================================")
-    log("       YouTube 24/7 -> Restream -> TikTok")
-    log("============================================================")
-    log(f"YouTube        : {YOUTUBE_URL}")
-    log("Destination    : Restream")
-    log("Cookies        : OFF")
-    log("Video          : COPY")
-    log("Video Encode   : OFF")
-    log("Crop           : OFF")
-    log("Resize         : OFF")
-    log("FPS Convert    : OFF")
-    log("Audio          : AAC 128k")
-    log("Auto-Reconnect : ON")
-    log("Status         : STARTING")
-    log("============================================================")
+    global stopping
+
+    print_header()
 
     log("[SYSTEM] Starting 24/7 relay...")
+    log("")
 
-    while not shutdown_requested:
+    while not stopping:
 
-        try:
+        success = start_session()
 
-            run_session()
+        if not success:
 
-        except KeyboardInterrupt:
-            break
-
-        except Exception as e:
+            if stopping:
+                break
 
             log("")
-            log(f"[ERROR] Relay session error: {e}")
-            log("[SYSTEM] Cleaning up...")
+            log(
+                f"[SYSTEM] Session failed. "
+                f"Retrying in {RECONNECT_DELAY} seconds..."
+            )
 
             stop_all()
 
-        if shutdown_requested:
+            time.sleep(RECONNECT_DELAY)
+            continue
+
+        # ----------------------------------------------------
+        # MONITOR BOTH PROCESSES
+        # ----------------------------------------------------
+
+        while not stopping:
+
+            time.sleep(2)
+
+            if streamlink_process is None:
+                break
+
+            if ffmpeg_process is None:
+                break
+
+            streamlink_code = streamlink_process.poll()
+            ffmpeg_code = ffmpeg_process.poll()
+
+            # Streamlink died
+            if streamlink_code is not None:
+
+                log("")
+                log(
+                    "[SYSTEM] Streamlink stopped "
+                    f"(exit code: {streamlink_code})."
+                )
+
+                stop_process(ffmpeg_process, "FFmpeg")
+
+                ffmpeg_process = None
+                streamlink_process = None
+
+                break
+
+            # FFmpeg died
+            if ffmpeg_code is not None:
+
+                log("")
+                log(
+                    "[SYSTEM] FFmpeg stopped "
+                    f"(exit code: {ffmpeg_code})."
+                )
+
+                stop_process(streamlink_process, "Streamlink")
+
+                streamlink_process = None
+                ffmpeg_process = None
+
+                break
+
+        if stopping:
             break
 
         # ----------------------------------------------------
-        # Reconnect delay
+        # RECONNECT
         # ----------------------------------------------------
 
         log("")
         log("============================================================")
         log(
             f"[SYSTEM] Reconnecting in "
-            f"{RESTART_DELAY} seconds..."
+            f"{RECONNECT_DELAY} seconds..."
         )
         log("============================================================")
 
-        for _ in range(RESTART_DELAY):
+        stop_all()
 
-            if shutdown_requested:
-                break
-
-            time.sleep(1)
-
-    stop_all()
-
-    log("[SYSTEM] Relay stopped.")
+        time.sleep(RECONNECT_DELAY)
 
 
 # ============================================================
@@ -539,4 +475,26 @@ def main():
 # ============================================================
 
 if __name__ == "__main__":
-    main()
+
+    try:
+        main()
+
+    except KeyboardInterrupt:
+        shutdown()
+
+    except Exception as e:
+        log("")
+        log("============================================================")
+        log("[SYSTEM] FATAL ERROR")
+        log(f"[SYSTEM] {type(e).__name__}: {e}")
+        log("============================================================")
+
+        stop_all()
+
+        time.sleep(RECONNECT_DELAY)
+
+        # Keep container alive and retry instead of dying
+        try:
+            main()
+        except Exception:
+            shutdown()
