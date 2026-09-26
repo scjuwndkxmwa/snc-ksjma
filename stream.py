@@ -8,7 +8,7 @@ import sys
 # SETTINGS
 # =========================================================
 
-YOUTUBE_URL = "https://www.youtube.com/@Yasseraldosry/live"
+YOUTUBE_URL = "https://www.youtube.com/watch?v=9dqd0faQMwU"
 
 RESTREAM_URL = (
     "rtmp://live.restream.io/live/"
