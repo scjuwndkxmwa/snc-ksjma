@@ -11,15 +11,16 @@ import sys
 
 YOUTUBE_URL = "https://www.youtube.com/live/7DHNbnPMNiM"
 
-RESTREAM_STREAM_KEY = "re_12012590_event333a4548cabc4367b4154e3ccbd1a7f9"
+RESTREAM_STREAM_KEY = (
+    "re_12012590_event333a4548cabc4367b4154e3ccbd1a7f9"
+)
 
 RESTREAM_RTMP = (
     "rtmp://live.restream.io/live/"
     + RESTREAM_STREAM_KEY
 )
 
-RECONNECT_DELAY = 5
-SOURCE_RETRY_DELAY = 5
+RECONNECT_DELAY = 10
 
 
 # =========================================================
@@ -32,6 +33,7 @@ print("=" * 60)
 
 print(f"YouTube        : {YOUTUBE_URL}")
 print("Destination    : Restream")
+print("Cookies        : OFF")
 print("Video          : COPY")
 print("Video Encode   : OFF")
 print("Crop           : OFF")
@@ -39,26 +41,24 @@ print("Resize         : OFF")
 print("FPS Convert    : OFF")
 print("Audio          : AAC 128k")
 print("Auto-Reconnect : ON")
-print("Cookies        : OFF")
 print("Status         : STARTING")
 print("=" * 60)
 
 
 # =========================================================
-# PROCESS CONTROL
+# PROCESSES
 # =========================================================
 
 streamlink_process = None
 ffmpeg_process = None
 
 
-def stop_process(process, name="process"):
+def stop_process(process, name):
 
     if process is None:
         return
 
     try:
-
         if process.poll() is None:
 
             print(f"[SYSTEM] Stopping {name}...")
@@ -73,7 +73,7 @@ def stop_process(process, name="process"):
                 print(f"[SYSTEM] Killing {name}...")
 
                 process.kill()
-                process.wait(timeout=3)
+                process.wait(timeout=5)
 
     except Exception as e:
 
@@ -112,7 +112,6 @@ signal.signal(signal.SIGINT, signal_handler)
 def build_streamlink_command():
 
     return [
-
         "streamlink",
 
         "--stdout",
@@ -129,7 +128,6 @@ def build_streamlink_command():
         "--stream-timeout", "60",
 
         YOUTUBE_URL,
-
         "best"
     ]
 
@@ -148,10 +146,6 @@ def build_ffmpeg_command():
         "-loglevel", "warning",
         "-stats",
 
-        # -------------------------------------------------
-        # INPUT
-        # -------------------------------------------------
-
         "-thread_queue_size", "2048",
 
         "-fflags",
@@ -163,10 +157,9 @@ def build_ffmpeg_command():
         "-i",
         "-",
 
-        # -------------------------------------------------
-        # VIDEO
-        # COPY - NO ENCODING
-        # -------------------------------------------------
+        # =================================================
+        # VIDEO = COPY
+        # =================================================
 
         "-map",
         "0:v:0",
@@ -174,10 +167,9 @@ def build_ffmpeg_command():
         "-c:v",
         "copy",
 
-        # -------------------------------------------------
-        # AUDIO
-        # AAC ONLY
-        # -------------------------------------------------
+        # =================================================
+        # AUDIO = AAC
+        # =================================================
 
         "-map",
         "0:a:0?",
@@ -197,9 +189,9 @@ def build_ffmpeg_command():
         "-af",
         "aresample=async=1000:min_hard_comp=0.100000:first_pts=0",
 
-        # -------------------------------------------------
+        # =================================================
         # OUTPUT
-        # -------------------------------------------------
+        # =================================================
 
         "-fps_mode",
         "passthrough",
@@ -218,7 +210,7 @@ def build_ffmpeg_command():
 
 
 # =========================================================
-# MAIN
+# MAIN LOOP
 # =========================================================
 
 def run_stream():
@@ -244,6 +236,7 @@ def run_stream():
             # -------------------------------------------------
 
             print("[SYSTEM] Starting Streamlink...")
+            print("[SYSTEM] Cookies: OFF")
             print("[SYSTEM] Waiting for YouTube stream data...")
 
             streamlink_process = subprocess.Popen(
@@ -257,26 +250,25 @@ def run_stream():
                 bufsize=0
             )
 
-            # Give Streamlink time to resolve the YouTube stream.
-            time.sleep(3)
+            # -------------------------------------------------
+            # Give Streamlink time to connect
+            # -------------------------------------------------
 
-            # -------------------------------------------------
-            # CHECK STREAMLINK
-            # -------------------------------------------------
+            time.sleep(5)
 
             if streamlink_process.poll() is not None:
 
                 print(
-                    "[ERROR] Streamlink stopped "
-                    "before FFmpeg started."
+                    "[SYSTEM] Streamlink exited before "
+                    "FFmpeg could start."
                 )
 
-                time.sleep(SOURCE_RETRY_DELAY)
+                time.sleep(RECONNECT_DELAY)
 
                 continue
 
             # -------------------------------------------------
-            # START FFMPEG DIRECTLY
+            # START FFMPEG
             # -------------------------------------------------
 
             print("[SYSTEM] YouTube stream detected.")
@@ -299,7 +291,6 @@ def run_stream():
                 bufsize=0
             )
 
-            # Parent no longer needs this pipe.
             if streamlink_process.stdout:
 
                 streamlink_process.stdout.close()
@@ -315,7 +306,6 @@ def run_stream():
                 ffmpeg_status = ffmpeg_process.poll()
                 streamlink_status = streamlink_process.poll()
 
-                # FFmpeg stopped
                 if ffmpeg_status is not None:
 
                     print(
@@ -325,7 +315,6 @@ def run_stream():
 
                     break
 
-                # Streamlink stopped
                 if streamlink_status is not None:
 
                     print(
@@ -339,34 +328,24 @@ def run_stream():
 
         except KeyboardInterrupt:
 
-            print("\n[SYSTEM] Keyboard interrupt.")
+            print("\n[SYSTEM] Stopped by user.")
 
             cleanup()
 
             break
 
-        except BrokenPipeError:
-
-            print("\n[SYSTEM] Broken pipe detected.")
-
-            cleanup()
-
         except Exception as e:
 
             print(
-                f"\n[ERROR] {type(e).__name__}: {e}"
+                f"[ERROR] {type(e).__name__}: {e}"
             )
 
         finally:
 
             cleanup()
 
-        # -------------------------------------------------
-        # AUTO RECONNECT
-        # -------------------------------------------------
-
         print("\n" + "=" * 60)
-        print("[SYSTEM] YouTube stream ended or connection was lost.")
+        print("[SYSTEM] Stream ended or connection lost.")
         print(
             f"[SYSTEM] Auto-reconnect in "
             f"{RECONNECT_DELAY} seconds..."
@@ -388,7 +367,7 @@ try:
 
 except KeyboardInterrupt:
 
-    print("\n[SYSTEM] Stopped.")
+    print("\n[SYSTEM] Shutdown.")
 
 finally:
 
