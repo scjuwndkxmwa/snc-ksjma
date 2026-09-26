@@ -1,2 +1,2 @@
-streamlink==8.6.1
+streamlink
 urllib3<2.0.0
