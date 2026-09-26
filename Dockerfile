@@ -1,19 +1,14 @@
-FROM python:3.11-slim
+FROM python:3.10-slim
 
-RUN apt-get update && apt-get install -y \
+RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
-    nodejs \
-    npm \
-    git \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
 COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
 
-RUN pip install --no-cache-dir -U pip \
-    && pip install --no-cache-dir -r requirements.txt
+COPY . .
 
-COPY stream.py .
-
-CMD ["python", "stream.py"]
+CMD ["python", "-u", "stream.py"]
