@@ -6,24 +6,19 @@ ENV PYTHONDONTWRITEBYTECODE=1
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         ffmpeg \
-        curl \
         ca-certificates \
         tini \
     && rm -rf /var/lib/apt/lists/*
 
-RUN pip install --no-cache-dir --upgrade pip \
-    && pip install --no-cache-dir \
-        streamlink \
-        yt-dlp
-
 WORKDIR /app
 
-COPY requirements.txt .
+COPY requirements.txt /app/requirements.txt
 
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir --upgrade pip \
+    && pip install --no-cache-dir -r /app/requirements.txt
 
-COPY main.py .
+COPY main.py /app/main.py
 
 ENTRYPOINT ["/usr/bin/tini", "--"]
 
-CMD ["python", "-u", "main.py"]
+CMD ["python", "-u", "/app/main.py"]
