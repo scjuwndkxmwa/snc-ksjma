@@ -29,7 +29,7 @@ RECONNECT_DELAY = 5
 MAX_RECONNECT_DELAY = 30
 
 # ============================================================
-# MEMORY / BUFFER
+# LOW MEMORY
 # ============================================================
 
 RINGBUFFER_SIZE = "16M"
@@ -51,7 +51,6 @@ STREAM_TIMEOUT = "30"
 
 PLAYLIST_RELOAD_ATTEMPTS = "5"
 
-
 # ============================================================
 # AUDIO
 # ============================================================
@@ -59,7 +58,6 @@ PLAYLIST_RELOAD_ATTEMPTS = "5"
 AUDIO_BITRATE = "128k"
 AUDIO_RATE = "44100"
 AUDIO_CHANNELS = "2"
-
 
 # ============================================================
 # GLOBALS
@@ -69,7 +67,6 @@ streamlink_process = None
 ffmpeg_process = None
 
 shutdown_requested = False
-
 cookies_file = None
 
 
@@ -86,7 +83,6 @@ def log(text=""):
 # ============================================================
 
 def handle_signal(signum, frame):
-
     global shutdown_requested
 
     shutdown_requested = True
@@ -115,9 +111,7 @@ def prepare_cookies():
     ).strip()
 
     if not cookies_data:
-
         log("[SYSTEM] YouTube Cookies: OFF")
-
         return None
 
     try:
@@ -155,7 +149,7 @@ def prepare_cookies():
 
 
 # ============================================================
-# CLEAN COOKIES
+# REMOVE COOKIES
 # ============================================================
 
 def remove_cookies():
@@ -260,9 +254,13 @@ def check_dependencies():
 
     log("[SYSTEM] Checking dependencies...")
 
+    # --------------------------------------------------------
+    # STREAMLINK
+    # --------------------------------------------------------
+
     try:
 
-        streamlink_version = subprocess.run(
+        result = subprocess.run(
             ["streamlink", "--version"],
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
@@ -270,7 +268,7 @@ def check_dependencies():
             timeout=10
         )
 
-        if streamlink_version.returncode != 0:
+        if result.returncode != 0:
 
             log(
                 "[ERROR] Streamlink is not working."
@@ -279,8 +277,8 @@ def check_dependencies():
             return False
 
         log(
-            "[SYSTEM] "
-            + streamlink_version.stdout.strip()
+            "[SYSTEM] " +
+            result.stdout.strip()
         )
 
     except Exception as e:
@@ -291,9 +289,13 @@ def check_dependencies():
 
         return False
 
+    # --------------------------------------------------------
+    # FFMPEG
+    # --------------------------------------------------------
+
     try:
 
-        ffmpeg_version = subprocess.run(
+        result = subprocess.run(
             ["ffmpeg", "-version"],
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
@@ -301,7 +303,7 @@ def check_dependencies():
             timeout=10
         )
 
-        if ffmpeg_version.returncode != 0:
+        if result.returncode != 0:
 
             log(
                 "[ERROR] FFmpeg is not working."
@@ -310,8 +312,7 @@ def check_dependencies():
             return False
 
         first_line = (
-            ffmpeg_version.stdout
-            .splitlines()[0]
+            result.stdout.splitlines()[0]
         )
 
         log("[SYSTEM] " + first_line)
@@ -369,6 +370,8 @@ def build_streamlink_command():
 
         "--hls-playlist-reload-attempts",
         PLAYLIST_RELOAD_ATTEMPTS,
+
+        "--stdout"
     ]
 
     # --------------------------------------------------------
@@ -382,12 +385,7 @@ def build_streamlink_command():
             cookies_file
         ])
 
-    # --------------------------------------------------------
-    # OUTPUT
-    # --------------------------------------------------------
-
     command.extend([
-        "--stdout",
         YOUTUBE_URL,
         QUALITY
     ])
@@ -412,19 +410,15 @@ def build_ffmpeg_command():
 
         "-stats",
 
-        # ----------------------------------------------------
-        # INPUT BUFFER
-        # ----------------------------------------------------
-
         "-thread_queue_size",
         THREAD_QUEUE_SIZE,
 
         "-i",
         "-",
 
-        # ----------------------------------------------------
+        # ====================================================
         # VIDEO COPY
-        # ----------------------------------------------------
+        # ====================================================
 
         "-map",
         "0:v:0",
@@ -432,9 +426,9 @@ def build_ffmpeg_command():
         "-c:v",
         "copy",
 
-        # ----------------------------------------------------
+        # ====================================================
         # AUDIO
-        # ----------------------------------------------------
+        # ====================================================
 
         "-map",
         "0:a:0?",
@@ -454,9 +448,9 @@ def build_ffmpeg_command():
         "-af",
         "aresample=async=1000:min_hard_comp=0.100:first_pts=0",
 
-        # ----------------------------------------------------
+        # ====================================================
         # TIMESTAMPS
-        # ----------------------------------------------------
+        # ====================================================
 
         "-fflags",
         "+genpts+discardcorrupt",
@@ -467,9 +461,9 @@ def build_ffmpeg_command():
         "-avoid_negative_ts",
         "make_zero",
 
-        # ----------------------------------------------------
+        # ====================================================
         # OUTPUT
-        # ----------------------------------------------------
+        # ====================================================
 
         "-f",
         "flv",
@@ -512,6 +506,7 @@ def start_session():
     )
 
     log("[SYSTEM] Video: COPY")
+    log("[SYSTEM] Video Encode: OFF")
     log("[SYSTEM] Audio: AAC 128k")
     log("[SYSTEM] Memory Mode: LOW")
     log("[SYSTEM] Waiting for YouTube stream...")
@@ -519,13 +514,9 @@ def start_session():
     try:
 
         streamlink_process = subprocess.Popen(
-
             command,
-
             stdout=subprocess.PIPE,
-
             stderr=None,
-
             bufsize=0
         )
 
@@ -565,21 +556,18 @@ def start_session():
     ffmpeg_command = build_ffmpeg_command()
 
     log("[SYSTEM] Starting FFmpeg...")
+    log("[SYSTEM] Video: COPY")
     log("[SYSTEM] Video Encode: OFF")
+    log("[SYSTEM] Audio: AAC 128k")
     log("[SYSTEM] Sending YouTube -> Restream...")
 
     try:
 
         ffmpeg_process = subprocess.Popen(
-
             ffmpeg_command,
-
             stdin=streamlink_process.stdout,
-
             stdout=subprocess.DEVNULL,
-
             stderr=None,
-
             bufsize=0
         )
 
@@ -593,7 +581,6 @@ def start_session():
 
         return False
 
-    # Parent doesn't need this descriptor anymore.
     try:
 
         if streamlink_process.stdout:
@@ -652,7 +639,6 @@ def monitor_session():
         # ----------------------------------------------------
 
         if streamlink_process is None:
-
             return False
 
         streamlink_code = (
@@ -673,7 +659,6 @@ def monitor_session():
         # ----------------------------------------------------
 
         if ffmpeg_process is None:
-
             return False
 
         ffmpeg_code = (
@@ -738,6 +723,8 @@ def main():
     log("Status         : STARTING")
 
     log("============================================================")
+    log("[SYSTEM] Starting 24/7 relay...")
+    log("============================================================")
 
     reconnect_delay = RECONNECT_DELAY
 
@@ -770,8 +757,6 @@ def main():
 
             continue
 
-        # Successful connection:
-        # reset backoff.
         reconnect_delay = RECONNECT_DELAY
 
         monitor_session()
@@ -834,7 +819,6 @@ if __name__ == "__main__":
     finally:
 
         stop_all()
-
         remove_cookies()
 
         log(
