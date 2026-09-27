@@ -2,9 +2,9 @@ import os
 import sys
 import time
 import signal
+import subprocess
 import base64
 import tempfile
-import subprocess
 
 
 # ============================================================
@@ -12,6 +12,10 @@ import subprocess
 # ============================================================
 
 YOUTUBE_URL = "https://www.youtube.com/live/7DHNbnPMNiM"
+
+# ============================================================
+# RESTREAM
+# ============================================================
 
 RESTREAM_STREAM_KEY = (
     "re_12012590_event333a4548cabc4367b4154e3ccbd1a7f9"
@@ -21,25 +25,30 @@ RESTREAM_RTMP = (
     f"rtmp://live.restream.io/live/{RESTREAM_STREAM_KEY}"
 )
 
+# ============================================================
+# STREAM
+# ============================================================
+
 QUALITY = "best"
 
-RECONNECT_DELAY = 10
-
-# ============================================================
-# STREAMLINK
-# ============================================================
-
+# لا نريد buffer ضخم يستهلك Railway RAM
 RINGBUFFER_SIZE = "32M"
-HLS_LIVE_EDGE = "2"
 
+# عدد قليل من القطع أمام البث لتقليل التأخير
+HLS_LIVE_EDGE = "3"
+
+# إعادة المحاولة بلا نهاية
 RETRY_STREAMS = "5"
 RETRY_MAX = "0"
 
+# HLS
 SEGMENT_ATTEMPTS = "5"
 SEGMENT_THREADS = "1"
 SEGMENT_TIMEOUT = "20"
 
 STREAM_TIMEOUT = "60"
+
+PLAYLIST_RELOAD_ATTEMPTS = "8"
 
 # ============================================================
 # AUDIO
@@ -49,6 +58,15 @@ AUDIO_BITRATE = "128k"
 AUDIO_RATE = "44100"
 AUDIO_CHANNELS = "2"
 
+
+# ============================================================
+# RECONNECT
+# ============================================================
+
+RECONNECT_DELAY = 5
+MAX_RECONNECT_DELAY = 60
+
+
 # ============================================================
 # GLOBALS
 # ============================================================
@@ -57,6 +75,7 @@ streamlink_process = None
 ffmpeg_process = None
 
 shutdown_requested = False
+
 cookies_file = None
 
 
@@ -73,6 +92,7 @@ def log(text=""):
 # ============================================================
 
 def handle_signal(signum, frame):
+
     global shutdown_requested
 
     shutdown_requested = True
@@ -86,34 +106,55 @@ signal.signal(signal.SIGTERM, handle_signal)
 
 
 # ============================================================
-# CREATE COOKIES FILE
+# COOKIES
 # ============================================================
 
-def prepare_cookies():
+def prepare_youtube_cookies():
 
     global cookies_file
 
-    cookies_b64 = os.environ.get("YOUTUBE_COOKIES_B64", "").strip()
+    encoded = os.environ.get("YOUTUBE_COOKIES_B64", "").strip()
 
-    if not cookies_b64:
+    if not encoded:
+
         log("[SYSTEM] YouTube Cookies: OFF")
         return None
 
     try:
 
-        data = base64.b64decode(cookies_b64)
-
-        fd, path = tempfile.mkstemp(
-            prefix="youtube_",
-            suffix=".txt"
+        decoded = base64.b64decode(
+            encoded,
+            validate=True
         )
 
-        with os.fdopen(fd, "wb") as f:
-            f.write(data)
+        if not decoded:
+
+            raise ValueError("Cookie data is empty.")
+
+        path = "/tmp/youtube_cookies.txt"
+
+        with open(path, "wb") as f:
+            f.write(decoded)
+
+        # Basic validation
+        with open(path, "r", encoding="utf-8", errors="ignore") as f:
+            first_lines = f.read(4096)
+
+        if (
+            "# Netscape HTTP Cookie File" not in first_lines
+            and
+            "# HTTP Cookie File" not in first_lines
+        ):
+
+            log(
+                "[WARNING] Cookie file does not look like "
+                "a Netscape cookies.txt file."
+            )
 
         cookies_file = path
 
         log("[SYSTEM] YouTube Cookies: ON")
+        log("[SYSTEM] Cookie file prepared.")
 
         return path
 
@@ -173,7 +214,7 @@ def stop_process(process, name):
 
 
 # ============================================================
-# STOP EVERYTHING
+# STOP ALL
 # ============================================================
 
 def stop_all():
@@ -181,6 +222,7 @@ def stop_all():
     global streamlink_process
     global ffmpeg_process
 
+    # FFmpeg first
     if ffmpeg_process is not None:
 
         stop_process(
@@ -190,6 +232,7 @@ def stop_all():
 
     ffmpeg_process = None
 
+    # Streamlink second
     if streamlink_process is not None:
 
         stop_process(
@@ -213,6 +256,10 @@ def build_streamlink_command():
         "--loglevel",
         "info",
 
+        # ----------------------------------------------------
+        # RETRIES
+        # ----------------------------------------------------
+
         "--retry-streams",
         RETRY_STREAMS,
 
@@ -222,8 +269,26 @@ def build_streamlink_command():
         "--retry-open",
         "5",
 
+        # ----------------------------------------------------
+        # BUFFER
+        # ----------------------------------------------------
+
         "--ringbuffer-size",
         RINGBUFFER_SIZE,
+
+        # ----------------------------------------------------
+        # HLS
+        # ----------------------------------------------------
+
+        "--hls-live-edge",
+        HLS_LIVE_EDGE,
+
+        "--hls-playlist-reload-attempts",
+        PLAYLIST_RELOAD_ATTEMPTS,
+
+        # ----------------------------------------------------
+        # SEGMENTS
+        # ----------------------------------------------------
 
         "--stream-segment-attempts",
         SEGMENT_ATTEMPTS,
@@ -237,12 +302,15 @@ def build_streamlink_command():
         "--stream-timeout",
         STREAM_TIMEOUT,
 
-        "--hls-live-edge",
-        HLS_LIVE_EDGE,
+        # ----------------------------------------------------
+        # OUTPUT
+        # ----------------------------------------------------
 
-        "--hls-playlist-reload-attempts",
-        "5",
+        "--stdout",
 
+        YOUTUBE_URL,
+
+        QUALITY
     ]
 
     # --------------------------------------------------------
@@ -251,24 +319,15 @@ def build_streamlink_command():
 
     if cookies_file:
 
-        command.extend([
-            "--http-cookies-file",
+        command.insert(
+            command.index("--stdout"),
+            "--http-cookies-file"
+        )
+
+        command.insert(
+            command.index("--stdout"),
             cookies_file
-        ])
-
-    # --------------------------------------------------------
-    # OUTPUT
-    # --------------------------------------------------------
-
-    command.extend([
-
-        "--stdout",
-
-        YOUTUBE_URL,
-
-        QUALITY
-
-    ])
+        )
 
     return command
 
@@ -291,17 +350,17 @@ def build_ffmpeg_command():
         "-stats",
 
         # ----------------------------------------------------
-        # INPUT
+        # INPUT BUFFER
         # ----------------------------------------------------
 
         "-thread_queue_size",
-        "512",
+        "256",
 
         "-i",
         "-",
 
         # ----------------------------------------------------
-        # VIDEO COPY
+        # VIDEO
         # ----------------------------------------------------
 
         "-map",
@@ -330,7 +389,10 @@ def build_ffmpeg_command():
         AUDIO_CHANNELS,
 
         "-af",
-        "aresample=async=1000:min_hard_comp=0.100:first_pts=0",
+        "aresample="
+        "async=1000:"
+        "min_hard_comp=0.100:"
+        "first_pts=0",
 
         # ----------------------------------------------------
         # TIMESTAMPS
@@ -342,21 +404,18 @@ def build_ffmpeg_command():
         "-err_detect",
         "ignore_err",
 
-        "-avoid_negative_ts",
-        "make_zero",
+        # مهم مع إعادة الاتصال
+        "-max_interleave_delta",
+        "0",
 
         # ----------------------------------------------------
-        # FLV
+        # OUTPUT
         # ----------------------------------------------------
-
-        "-flvflags",
-        "no_duration_filesize",
 
         "-f",
         "flv",
 
         RESTREAM_RTMP
-
     ]
 
 
@@ -372,13 +431,13 @@ def start_session():
     stop_all()
 
     log("")
-    log("============================================================")
+    log("=" * 60)
     log("[SYSTEM] Starting relay session")
-    log("============================================================")
+    log("=" * 60)
 
-    # --------------------------------------------------------
+    # ========================================================
     # STREAMLINK
-    # --------------------------------------------------------
+    # ========================================================
 
     command = build_streamlink_command()
 
@@ -388,6 +447,13 @@ def start_session():
     log("[SYSTEM] Video Encode: OFF")
     log(f"[SYSTEM] Audio: AAC {AUDIO_BITRATE}")
     log("[SYSTEM] Memory Mode: LOW")
+
+    if cookies_file:
+        log("[SYSTEM] YouTube Cookies: ON")
+    else:
+        log("[SYSTEM] YouTube Cookies: OFF")
+
+    log("[SYSTEM] Waiting for YouTube stream...")
 
     try:
 
@@ -399,8 +465,9 @@ def start_session():
 
             stderr=None,
 
-            bufsize=0
+            stdin=subprocess.DEVNULL,
 
+            bufsize=0
         )
 
     except Exception as e:
@@ -414,13 +481,19 @@ def start_session():
 
         return False
 
+    # --------------------------------------------------------
+    # Give Streamlink time to initialize
+    # --------------------------------------------------------
+
     time.sleep(3)
 
     if streamlink_process.poll() is not None:
 
+        code = streamlink_process.returncode
+
         log(
             "[ERROR] Streamlink exited "
-            f"(code {streamlink_process.returncode})"
+            f"(exit code: {code})"
         )
 
         streamlink_process = None
@@ -429,13 +502,16 @@ def start_session():
 
     log("[SYSTEM] Streamlink process is alive.")
 
-    # --------------------------------------------------------
+    # ========================================================
     # FFMPEG
-    # --------------------------------------------------------
+    # ========================================================
 
     ffmpeg_command = build_ffmpeg_command()
 
     log("[SYSTEM] Starting FFmpeg...")
+    log("[SYSTEM] Video: COPY")
+    log("[SYSTEM] Video Encode: OFF")
+    log(f"[SYSTEM] Audio: AAC {AUDIO_BITRATE}")
     log("[SYSTEM] Sending YouTube -> Restream...")
 
     try:
@@ -451,7 +527,6 @@ def start_session():
             stderr=None,
 
             bufsize=0
-
         )
 
     except Exception as e:
@@ -465,8 +540,7 @@ def start_session():
 
         return False
 
-    # Parent no longer needs the pipe.
-
+    # Parent doesn't need this descriptor anymore
     try:
 
         if streamlink_process.stdout:
@@ -475,13 +549,19 @@ def start_session():
     except Exception:
         pass
 
-    time.sleep(3)
+    time.sleep(4)
+
+    # ========================================================
+    # CHECK
+    # ========================================================
 
     if ffmpeg_process.poll() is not None:
 
+        code = ffmpeg_process.returncode
+
         log(
             "[ERROR] FFmpeg exited "
-            f"(code {ffmpeg_process.returncode})"
+            f"(exit code: {code})"
         )
 
         stop_all()
@@ -508,7 +588,7 @@ def monitor_session():
 
     while not shutdown_requested:
 
-        time.sleep(2)
+        time.sleep(3)
 
         # ----------------------------------------------------
         # STREAMLINK
@@ -516,7 +596,7 @@ def monitor_session():
 
         if streamlink_process is None:
 
-            log("[SYSTEM] Streamlink missing.")
+            log("[ERROR] Streamlink process missing.")
 
             return False
 
@@ -526,7 +606,6 @@ def monitor_session():
 
         if streamlink_code is not None:
 
-            log("")
             log(
                 "[SYSTEM] Streamlink stopped "
                 f"(exit code: {streamlink_code})"
@@ -540,7 +619,7 @@ def monitor_session():
 
         if ffmpeg_process is None:
 
-            log("[SYSTEM] FFmpeg missing.")
+            log("[ERROR] FFmpeg process missing.")
 
             return False
 
@@ -550,7 +629,6 @@ def monitor_session():
 
         if ffmpeg_code is not None:
 
-            log("")
             log(
                 "[SYSTEM] FFmpeg stopped "
                 f"(exit code: {ffmpeg_code})"
@@ -584,79 +662,103 @@ def main():
 
     global shutdown_requested
 
-    log("")
-    log("============================================================")
+    log("=" * 60)
     log("       YouTube 24/7 -> Restream -> TikTok")
-    log("============================================================")
+    log("=" * 60)
 
-    log(
-        f"YouTube        : {YOUTUBE_URL}"
-    )
-
+    log(f"YouTube        : {YOUTUBE_URL}")
     log("Destination    : Restream")
     log("Extractor      : Streamlink")
+
+    if cookies_file:
+        log("Cookies        : ON")
+    else:
+        log("Cookies        : OFF")
+
+    log("Quality        : BEST")
     log("Video          : COPY")
     log("Video Encode   : OFF")
     log("Crop           : OFF")
     log("Resize         : OFF")
     log("FPS Convert    : OFF")
-    log(
-        f"Audio          : AAC {AUDIO_BITRATE}"
-    )
+    log(f"Audio          : AAC {AUDIO_BITRATE}")
     log("Memory Mode    : LOW")
     log("Auto-Reconnect : ON")
-    log("============================================================")
-
-    prepare_cookies()
+    log("Status         : STARTING")
+    log("=" * 60)
 
     log("[SYSTEM] Starting 24/7 relay...")
 
-    failure_count = 0
+    reconnect_delay = RECONNECT_DELAY
 
     while not shutdown_requested:
+
+        # ====================================================
+        # START
+        # ====================================================
 
         success = start_session()
 
         if shutdown_requested:
             break
 
-        if success:
+        if not success:
 
-            failure_count = 0
+            stop_all()
 
-            monitor_session()
+            log("")
+            log(
+                "[SYSTEM] Stream ended or "
+                "connection lost."
+            )
 
-        else:
+            log(
+                f"[SYSTEM] Reconnecting in "
+                f"{reconnect_delay} seconds..."
+            )
 
-            failure_count += 1
+            time.sleep(reconnect_delay)
+
+            reconnect_delay = min(
+                reconnect_delay * 2,
+                MAX_RECONNECT_DELAY
+            )
+
+            continue
+
+        # ====================================================
+        # SUCCESS
+        # ====================================================
+
+        # بمجرد نجاح الاتصال نرجع زمن
+        # إعادة الاتصال إلى 5 ثواني.
+        reconnect_delay = RECONNECT_DELAY
+
+        # ====================================================
+        # MONITOR
+        # ====================================================
+
+        monitor_session()
 
         if shutdown_requested:
             break
 
-        stop_all()
-
-        # ----------------------------------------------------
-        # BACKOFF
-        # ----------------------------------------------------
-
-        delay = min(
-            RECONNECT_DELAY * (2 ** min(failure_count, 4)),
-            60
-        )
+        # ====================================================
+        # RECONNECT
+        # ====================================================
 
         log("")
-        log("============================================================")
+        log("=" * 60)
         log("[SYSTEM] Stream ended or connection lost.")
         log(
-            f"[SYSTEM] Reconnecting in {delay} seconds..."
+            f"[SYSTEM] Reconnecting in "
+            f"{reconnect_delay} seconds..."
         )
-        log("============================================================")
+        log("=" * 60)
 
-        time.sleep(delay)
+        stop_all()
 
-    log("[SYSTEM] Relay stopped.")
-
-    stop_all()
+        time.sleep(reconnect_delay)
 
 
 # ============================================================
@@ -667,35 +769,29 @@ if __name__ == "__main__":
 
     try:
 
+        # Prepare cookies BEFORE starting Streamlink
+        prepare_youtube_cookies()
+
         main()
 
     except KeyboardInterrupt:
 
         shutdown_requested = True
 
-        stop_all()
+        log("[SYSTEM] Keyboard interrupt.")
 
     except Exception as e:
 
         log("")
-        log("============================================================")
-        log("[SYSTEM] FATAL ERROR")
+        log("=" * 60)
+        log("[SYSTEM] UNEXPECTED ERROR")
         log(
             f"[SYSTEM] {type(e).__name__}: {e}"
         )
-        log("============================================================")
-
-        stop_all()
-
-        time.sleep(5)
+        log("=" * 60)
 
     finally:
 
         stop_all()
 
-        if cookies_file:
-
-            try:
-                os.remove(cookies_file)
-            except Exception:
-                pass
+        log("[SYSTEM] Relay stopped.")
