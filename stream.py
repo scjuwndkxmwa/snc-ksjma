@@ -22,25 +22,22 @@ RESTREAM_RTMP = (
 
 QUALITY = "best"
 
+COOKIES_FILE = os.environ.get(
+    "YOUTUBE_COOKIES_FILE",
+    "/app/cookies.txt"
+)
+
 RECONNECT_DELAY = 5
 MAX_RECONNECT_DELAY = 30
 
-# إعادة استخراج رابط YouTube كلما انتهت جلسة FFmpeg
-URL_REFRESH_DELAY = 3
+YT_DLP_TIMEOUT = 90
 
-# لو لم تصل أي frames لفترة طويلة نعيد الجلسة
-STALL_TIMEOUT = 45
-
-# مدة الانتظار بين محاولات yt-dlp
-YTDLP_RETRY_DELAY = 10
+FFMPEG_START_WAIT = 5
 
 # ============================================================
-# VIDEO / AUDIO
+# AUDIO
 # ============================================================
 
-VIDEO_CODEC = "copy"
-
-AUDIO_CODEC = "aac"
 AUDIO_BITRATE = "128k"
 AUDIO_RATE = "44100"
 AUDIO_CHANNELS = "2"
@@ -53,8 +50,6 @@ AUDIO_CHANNELS = "2"
 ffmpeg_process = None
 
 shutdown_requested = False
-
-last_frame_time = 0
 
 session_number = 0
 
@@ -86,7 +81,16 @@ signal.signal(signal.SIGTERM, handle_signal)
 
 
 # ============================================================
-# PROCESS STOP
+# CLEAN MEMORY
+# ============================================================
+
+def clean_memory():
+
+    gc.collect()
+
+
+# ============================================================
+# STOP PROCESS
 # ============================================================
 
 def stop_process(process, name):
@@ -123,7 +127,10 @@ def stop_process(process, name):
 
     except Exception as e:
 
-        log(f"[SYSTEM] Error stopping {name}: {e}")
+        log(
+            f"[SYSTEM] Error stopping {name}: "
+            f"{type(e).__name__}: {e}"
+        )
 
 
 # ============================================================
@@ -143,20 +150,17 @@ def stop_all():
 
     ffmpeg_process = None
 
-    # Force Python garbage collection.
-    # This helps keep the Railway container clean.
-    gc.collect()
+    clean_memory()
 
 
 # ============================================================
-# GET FRESH YOUTUBE HLS URL
+# YT-DLP COMMAND
 # ============================================================
 
-def get_fresh_hls_url():
-
-    log("[SYSTEM] Resolving fresh YouTube HLS URL...")
+def build_ytdlp_command():
 
     command = [
+
         "yt-dlp",
 
         "--no-warnings",
@@ -165,13 +169,59 @@ def get_fresh_hls_url():
 
         "--skip-download",
 
+        "--get-url",
+
         "--format",
         QUALITY,
 
-        "--get-url",
+        "--retries",
+        "10",
 
-        YOUTUBE_URL
+        "--fragment-retries",
+        "10",
+
+        "--retry-sleep",
+        "exp=2:10",
+
+        "--socket-timeout",
+        "30",
+
+        "--force-ipv4",
+
     ]
+
+    # --------------------------------------------------------
+    # COOKIES
+    # --------------------------------------------------------
+
+    if os.path.isfile(COOKIES_FILE):
+
+        command.extend([
+            "--cookies",
+            COOKIES_FILE
+        ])
+
+        log("[SYSTEM] YouTube Cookies: ON")
+
+    else:
+
+        log("[SYSTEM] YouTube Cookies: OFF")
+
+    command.append(YOUTUBE_URL)
+
+    return command
+
+
+# ============================================================
+# GET FRESH HLS URL
+# ============================================================
+
+def get_fresh_url():
+
+    log("")
+    log("[SYSTEM] Resolving fresh YouTube stream URL...")
+
+    command = build_ytdlp_command()
 
     try:
 
@@ -180,7 +230,7 @@ def get_fresh_hls_url():
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
-            timeout=60
+            timeout=YT_DLP_TIMEOUT
         )
 
     except subprocess.TimeoutExpired:
@@ -192,7 +242,7 @@ def get_fresh_hls_url():
     except Exception as e:
 
         log(
-            f"[ERROR] Could not execute yt-dlp: "
+            f"[ERROR] yt-dlp execution error: "
             f"{type(e).__name__}: {e}"
         )
 
@@ -205,29 +255,41 @@ def get_fresh_hls_url():
         log("[ERROR] yt-dlp failed:")
 
         if error_text:
-            log(error_text[-3000:])
+            log(error_text[-4000:])
 
         return None
 
-    urls = [
-        line.strip()
-        for line in result.stdout.splitlines()
-        if line.strip()
-    ]
+    urls = []
+
+    for line in result.stdout.splitlines():
+
+        line = line.strip()
+
+        if not line:
+            continue
+
+        if line.startswith("http://") or line.startswith("https://"):
+
+            urls.append(line)
 
     if not urls:
 
-        log("[ERROR] yt-dlp returned no media URL.")
+        log("[ERROR] yt-dlp returned no stream URL.")
 
         return None
 
-    # Prefer HLS / m3u8.
+    # Prefer HLS.
     for url in urls:
 
         if ".m3u8" in url.lower():
+
+            log("[SYSTEM] Fresh HLS URL obtained.")
+
             return url
 
-    # Fallback to last URL returned by yt-dlp.
+    # Fallback.
+    log("[SYSTEM] Fresh YouTube URL obtained.")
+
     return urls[-1]
 
 
@@ -249,7 +311,7 @@ def build_ffmpeg_command(source_url):
         "-stats",
 
         # ====================================================
-        # HTTP / HLS RECONNECT
+        # NETWORK RECONNECT
         # ====================================================
 
         "-reconnect",
@@ -268,10 +330,7 @@ def build_ffmpeg_command(source_url):
         "4xx,5xx",
 
         "-reconnect_delay_max",
-        "15",
-
-        "-reconnect_max_retries",
-        "1000000",
+        "10",
 
         # ====================================================
         # INPUT
@@ -298,7 +357,7 @@ def build_ffmpeg_command(source_url):
         "0:a:0?",
 
         "-c:a",
-        AUDIO_CODEC,
+        "aac",
 
         "-b:a",
         AUDIO_BITRATE,
@@ -309,15 +368,11 @@ def build_ffmpeg_command(source_url):
         "-ac",
         AUDIO_CHANNELS,
 
-        # ====================================================
-        # AUDIO TIMESTAMP STABILITY
-        # ====================================================
-
         "-af",
         "aresample=async=1000:min_hard_comp=0.100:first_pts=0",
 
         # ====================================================
-        # TIMESTAMP HANDLING
+        # TIMESTAMPS
         # ====================================================
 
         "-fflags",
@@ -327,7 +382,7 @@ def build_ffmpeg_command(source_url):
         "ignore_err",
 
         # ====================================================
-        # FLV / RTMP
+        # RTMP OUTPUT
         # ====================================================
 
         "-flvflags",
@@ -347,11 +402,10 @@ def build_ffmpeg_command(source_url):
 def start_ffmpeg(source_url):
 
     global ffmpeg_process
-    global last_frame_time
 
     stop_all()
 
-    gc.collect()
+    clean_memory()
 
     log("")
     log("============================================================")
@@ -389,16 +443,14 @@ def start_ffmpeg(source_url):
 
         return False
 
-    last_frame_time = time.time()
-
-    time.sleep(5)
+    time.sleep(FFMPEG_START_WAIT)
 
     if ffmpeg_process.poll() is not None:
 
         code = ffmpeg_process.returncode
 
         log(
-            f"[ERROR] FFmpeg exited immediately "
+            f"[ERROR] FFmpeg stopped immediately "
             f"(exit code: {code})."
         )
 
@@ -406,31 +458,29 @@ def start_ffmpeg(source_url):
 
         return False
 
-    log("[SYSTEM] FFmpeg process is alive.")
     log("[SYSTEM] YouTube -> FFmpeg: CONNECTED")
     log("[SYSTEM] FFmpeg -> Restream: CONNECTED")
+    log("[SYSTEM] FFmpeg process is alive.")
     log("[SYSTEM] Stream is RUNNING.")
 
     return True
 
 
 # ============================================================
-# MONITOR FFMPEG
+# MONITOR
 # ============================================================
 
-def monitor_ffmpeg():
+def monitor():
 
     global ffmpeg_process
 
-    last_status = time.time()
+    last_heartbeat = time.time()
 
     while not shutdown_requested:
 
         time.sleep(5)
 
         if ffmpeg_process is None:
-
-            log("[SYSTEM] FFmpeg process missing.")
 
             return False
 
@@ -446,42 +496,33 @@ def monitor_ffmpeg():
 
             return False
 
-        # ----------------------------------------------------
-        # HEARTBEAT
-        # ----------------------------------------------------
-
-        if time.time() - last_status >= 60:
+        if time.time() - last_heartbeat >= 60:
 
             log("[SYSTEM] Relay is still RUNNING.")
 
-            last_status = time.time()
+            last_heartbeat = time.time()
 
     return False
 
 
 # ============================================================
-# WAIT
+# SAFE SLEEP
 # ============================================================
 
 def safe_sleep(seconds):
 
-    end_time = time.time() + seconds
+    end = time.time() + seconds
 
     while (
-        time.time() < end_time
+        time.time() < end
         and not shutdown_requested
     ):
 
-        time.sleep(
-            min(
-                1,
-                end_time - time.time()
-            )
-        )
+        time.sleep(1)
 
 
 # ============================================================
-# MAIN SESSION
+# SESSION
 # ============================================================
 
 def run_session():
@@ -497,39 +538,25 @@ def run_session():
     )
     log("============================================================")
 
-    # --------------------------------------------------------
-    # GET FRESH URL
-    # --------------------------------------------------------
+    source_url = get_fresh_url()
 
-    hls_url = get_fresh_hls_url()
+    if not source_url:
 
-    if not hls_url:
-
-        log(
-            "[SYSTEM] Could not obtain a fresh YouTube URL."
-        )
+        log("[SYSTEM] No YouTube stream URL.")
 
         return False
 
-    log("[SYSTEM] Fresh YouTube playback URL obtained.")
-
-    # --------------------------------------------------------
-    # START FFMPEG
-    # --------------------------------------------------------
-
-    if not start_ffmpeg(hls_url):
+    if not start_ffmpeg(source_url):
 
         return False
 
-    # --------------------------------------------------------
-    # MONITOR
-    # --------------------------------------------------------
-
-    result = monitor_ffmpeg()
+    monitor()
 
     stop_all()
 
-    return result
+    clean_memory()
+
+    return False
 
 
 # ============================================================
@@ -547,25 +574,15 @@ def main():
     log(f"YouTube        : {YOUTUBE_URL}")
     log("Destination    : Restream")
     log("Extractor      : yt-dlp")
-    log("Cookies        : OFF")
-    log("Quality        : BEST")
     log("Video          : COPY")
     log("Video Encode   : OFF")
-    log("Crop           : OFF")
-    log("Resize         : OFF")
-    log("FPS Convert    : OFF")
-    log(f"Audio          : AAC {AUDIO_BITRATE}")
+    log("Audio          : AAC 128k")
     log("HLS Reconnect  : ON")
-    log("Stall Recovery : ON")
-    log("Memory Mode    : LOW")
     log("Auto-Reconnect : ON")
-    log("Status         : STARTING")
-
-    log("============================================================")
-    log("[SYSTEM] Starting 24/7 relay...")
+    log("Memory Mode    : LOW")
     log("============================================================")
 
-    reconnect_delay = RECONNECT_DELAY
+    delay = RECONNECT_DELAY
 
     while not shutdown_requested:
 
@@ -576,55 +593,31 @@ def main():
         except Exception as e:
 
             log("")
-            log("============================================================")
-            log("[ERROR] SESSION EXCEPTION")
+            log("[ERROR] Session exception:")
             log(
-                f"[ERROR] {type(e).__name__}: {e}"
+                f"{type(e).__name__}: {e}"
             )
-            log("============================================================")
 
         if shutdown_requested:
             break
 
-        # ----------------------------------------------------
-        # CLEANUP
-        # ----------------------------------------------------
-
         stop_all()
-
-        gc.collect()
 
         log("")
         log("============================================================")
-        log("[SYSTEM] Stream ended or connection lost.")
         log(
-            f"[SYSTEM] Fresh reconnect in "
-            f"{reconnect_delay} seconds..."
+            f"[SYSTEM] Reconnecting in {delay} seconds..."
         )
         log("============================================================")
 
-        safe_sleep(reconnect_delay)
+        safe_sleep(delay)
 
-        # ----------------------------------------------------
-        # Gradually increase reconnect delay if failures repeat.
-        # Maximum 30 seconds.
-        # ----------------------------------------------------
-
-        reconnect_delay = min(
-            reconnect_delay + 2,
+        delay = min(
+            delay + 2,
             MAX_RECONNECT_DELAY
         )
 
-    # --------------------------------------------------------
-    # SHUTDOWN
-    # --------------------------------------------------------
-
-    log("")
-    log("[SYSTEM] Shutting down...")
-
     stop_all()
-
-    gc.collect()
 
     log("[SYSTEM] Relay stopped.")
 
@@ -643,23 +636,17 @@ if __name__ == "__main__":
 
         shutdown_requested = True
 
-        log("[SYSTEM] Keyboard interrupt.")
-
         stop_all()
 
     except Exception as e:
 
-        log("")
-        log("============================================================")
-        log("[SYSTEM] FATAL ERROR")
         log(
-            f"[SYSTEM] {type(e).__name__}: {e}"
+            f"[FATAL] {type(e).__name__}: {e}"
         )
-        log("============================================================")
 
         stop_all()
 
     finally:
 
         stop_all()
-        gc.collect()
+        clean_memory()
