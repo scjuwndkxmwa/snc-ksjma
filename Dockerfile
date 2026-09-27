@@ -3,6 +3,8 @@ FROM python:3.12-slim
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONDONTWRITEBYTECODE=1
 
+WORKDIR /app
+
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         ffmpeg \
@@ -10,15 +12,13 @@ RUN apt-get update \
         tini \
     && rm -rf /var/lib/apt/lists/*
 
-WORKDIR /app
-
-COPY requirements.txt /app/requirements.txt
+COPY requirements.txt .
 
 RUN pip install --no-cache-dir --upgrade pip \
-    && pip install --no-cache-dir -r /app/requirements.txt
+    && pip install --no-cache-dir -r requirements.txt
 
-COPY main.py /app/main.py
+COPY main.py .
 
 ENTRYPOINT ["/usr/bin/tini", "--"]
 
-CMD ["python", "-u", "/app/main.py"]
+CMD ["python", "-u", "main.py"]
