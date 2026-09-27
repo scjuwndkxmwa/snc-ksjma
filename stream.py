@@ -1,5 +1,4 @@
 import os
-import sys
 import time
 import signal
 import subprocess
@@ -27,17 +26,13 @@ QUALITY = "best"
 # ============================================================
 
 RECONNECT_DELAY = 5
-
 MAX_RECONNECT_DELAY = 30
 
 # ============================================================
-# MEMORY
+# MEMORY / BUFFER
 # ============================================================
 
-# Keep this small.
-# Do NOT use 512M or huge buffers.
 RINGBUFFER_SIZE = "16M"
-
 THREAD_QUEUE_SIZE = "512"
 
 # ============================================================
@@ -47,28 +42,22 @@ THREAD_QUEUE_SIZE = "512"
 HLS_LIVE_EDGE = "2"
 
 RETRY_STREAMS = "10"
-
-# 0 = unlimited
 RETRY_MAX = "0"
 
 SEGMENT_ATTEMPTS = "5"
-
 SEGMENT_THREADS = "1"
-
 SEGMENT_TIMEOUT = "15"
-
 STREAM_TIMEOUT = "30"
 
 PLAYLIST_RELOAD_ATTEMPTS = "5"
+
 
 # ============================================================
 # AUDIO
 # ============================================================
 
 AUDIO_BITRATE = "128k"
-
 AUDIO_RATE = "44100"
-
 AUDIO_CHANNELS = "2"
 
 
@@ -77,7 +66,6 @@ AUDIO_CHANNELS = "2"
 # ============================================================
 
 streamlink_process = None
-
 ffmpeg_process = None
 
 shutdown_requested = False
@@ -109,20 +97,22 @@ def handle_signal(signum, frame):
     log("============================================================")
 
 
-signal.signal(signal.SIGINT, handle_signal)
-
 signal.signal(signal.SIGTERM, handle_signal)
+signal.signal(signal.SIGINT, handle_signal)
 
 
 # ============================================================
-# CREATE COOKIES FILE
+# COOKIES
 # ============================================================
 
 def prepare_cookies():
 
     global cookies_file
 
-    cookies_data = os.environ.get("YOUTUBE_COOKIES", "").strip()
+    cookies_data = os.environ.get(
+        "YOUTUBE_COOKIES",
+        ""
+    ).strip()
 
     if not cookies_data:
 
@@ -137,7 +127,12 @@ def prepare_cookies():
             suffix=".txt"
         )
 
-        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as f:
+        with os.fdopen(
+            fd,
+            "w",
+            encoding="utf-8",
+            newline="\n"
+        ) as f:
 
             f.write(cookies_data)
 
@@ -148,14 +143,12 @@ def prepare_cookies():
 
         log("[SYSTEM] YouTube Cookies: ON")
 
-        log("[SYSTEM] Cookies file prepared.")
-
         return path
 
     except Exception as e:
 
         log(
-            f"[ERROR] Could not create YouTube cookies file: {e}"
+            f"[ERROR] Could not create cookies file: {e}"
         )
 
         return None
@@ -169,18 +162,17 @@ def remove_cookies():
 
     global cookies_file
 
-    if not cookies_file:
-        return
+    if cookies_file:
 
-    try:
+        try:
 
-        if os.path.exists(cookies_file):
-            os.remove(cookies_file)
+            if os.path.exists(cookies_file):
+                os.remove(cookies_file)
 
-    except Exception:
-        pass
+        except Exception:
+            pass
 
-    cookies_file = None
+        cookies_file = None
 
 
 # ============================================================
@@ -196,7 +188,9 @@ def stop_process(process, name):
 
         if process.poll() is None:
 
-            log(f"[SYSTEM] Stopping {name}...")
+            log(
+                f"[SYSTEM] Stopping {name}..."
+            )
 
             try:
                 process.terminate()
@@ -209,7 +203,9 @@ def stop_process(process, name):
 
             except subprocess.TimeoutExpired:
 
-                log(f"[SYSTEM] Killing {name}...")
+                log(
+                    f"[SYSTEM] Killing {name}..."
+                )
 
                 try:
                     process.kill()
@@ -229,7 +225,7 @@ def stop_process(process, name):
 
 
 # ============================================================
-# STOP EVERYTHING
+# STOP ALL
 # ============================================================
 
 def stop_all():
@@ -254,6 +250,81 @@ def stop_all():
         )
 
     streamlink_process = None
+
+
+# ============================================================
+# CHECK DEPENDENCIES
+# ============================================================
+
+def check_dependencies():
+
+    log("[SYSTEM] Checking dependencies...")
+
+    try:
+
+        streamlink_version = subprocess.run(
+            ["streamlink", "--version"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            timeout=10
+        )
+
+        if streamlink_version.returncode != 0:
+
+            log(
+                "[ERROR] Streamlink is not working."
+            )
+
+            return False
+
+        log(
+            "[SYSTEM] "
+            + streamlink_version.stdout.strip()
+        )
+
+    except Exception as e:
+
+        log(
+            f"[ERROR] Streamlink unavailable: {e}"
+        )
+
+        return False
+
+    try:
+
+        ffmpeg_version = subprocess.run(
+            ["ffmpeg", "-version"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            timeout=10
+        )
+
+        if ffmpeg_version.returncode != 0:
+
+            log(
+                "[ERROR] FFmpeg is not working."
+            )
+
+            return False
+
+        first_line = (
+            ffmpeg_version.stdout
+            .splitlines()[0]
+        )
+
+        log("[SYSTEM] " + first_line)
+
+    except Exception as e:
+
+        log(
+            f"[ERROR] FFmpeg unavailable: {e}"
+        )
+
+        return False
+
+    return True
 
 
 # ============================================================
@@ -298,7 +369,6 @@ def build_streamlink_command():
 
         "--hls-playlist-reload-attempts",
         PLAYLIST_RELOAD_ATTEMPTS,
-
     ]
 
     # --------------------------------------------------------
@@ -317,11 +387,8 @@ def build_streamlink_command():
     # --------------------------------------------------------
 
     command.extend([
-
         "--stdout",
-
         YOUTUBE_URL,
-
         QUALITY
     ])
 
@@ -345,9 +412,9 @@ def build_ffmpeg_command():
 
         "-stats",
 
-        # ====================================================
-        # LOW MEMORY PIPE
-        # ====================================================
+        # ----------------------------------------------------
+        # INPUT BUFFER
+        # ----------------------------------------------------
 
         "-thread_queue_size",
         THREAD_QUEUE_SIZE,
@@ -355,9 +422,9 @@ def build_ffmpeg_command():
         "-i",
         "-",
 
-        # ====================================================
-        # VIDEO
-        # ====================================================
+        # ----------------------------------------------------
+        # VIDEO COPY
+        # ----------------------------------------------------
 
         "-map",
         "0:v:0",
@@ -365,9 +432,9 @@ def build_ffmpeg_command():
         "-c:v",
         "copy",
 
-        # ====================================================
+        # ----------------------------------------------------
         # AUDIO
-        # ====================================================
+        # ----------------------------------------------------
 
         "-map",
         "0:a:0?",
@@ -387,9 +454,9 @@ def build_ffmpeg_command():
         "-af",
         "aresample=async=1000:min_hard_comp=0.100:first_pts=0",
 
-        # ====================================================
+        # ----------------------------------------------------
         # TIMESTAMPS
-        # ====================================================
+        # ----------------------------------------------------
 
         "-fflags",
         "+genpts+discardcorrupt",
@@ -400,9 +467,9 @@ def build_ffmpeg_command():
         "-avoid_negative_ts",
         "make_zero",
 
-        # ====================================================
+        # ----------------------------------------------------
         # OUTPUT
-        # ====================================================
+        # ----------------------------------------------------
 
         "-f",
         "flv",
@@ -427,26 +494,26 @@ def start_session():
     log("[SYSTEM] Starting relay session")
     log("============================================================")
 
-    # ========================================================
+    # --------------------------------------------------------
     # STREAMLINK
-    # ========================================================
+    # --------------------------------------------------------
 
     command = build_streamlink_command()
 
     log("[SYSTEM] Starting Streamlink...")
+
     log(
-        f"[SYSTEM] Cookies: "
-        f"{'ON' if cookies_file else 'OFF'}"
+        "[SYSTEM] Cookies: "
+        + ("ON" if cookies_file else "OFF")
     )
 
-    log(f"[SYSTEM] Quality: {QUALITY.upper()}")
+    log(
+        f"[SYSTEM] Quality: {QUALITY.upper()}"
+    )
 
-    log("[SYSTEM] Video source: COPY")
-
+    log("[SYSTEM] Video: COPY")
     log("[SYSTEM] Audio: AAC 128k")
-
-    log("[SYSTEM] Memory mode: LOW")
-
+    log("[SYSTEM] Memory Mode: LOW")
     log("[SYSTEM] Waiting for YouTube stream...")
 
     try:
@@ -472,10 +539,6 @@ def start_session():
 
         return False
 
-    # ========================================================
-    # GIVE STREAMLINK TIME
-    # ========================================================
-
     time.sleep(3)
 
     if streamlink_process.poll() is not None:
@@ -483,7 +546,7 @@ def start_session():
         code = streamlink_process.returncode
 
         log(
-            "[ERROR] Streamlink exited immediately "
+            "[ERROR] Streamlink exited "
             f"(exit code: {code})"
         )
 
@@ -491,22 +554,18 @@ def start_session():
 
         return False
 
-    log("[SYSTEM] Streamlink process is alive.")
+    log(
+        "[SYSTEM] Streamlink process is alive."
+    )
 
-    # ========================================================
+    # --------------------------------------------------------
     # FFMPEG
-    # ========================================================
+    # --------------------------------------------------------
 
     ffmpeg_command = build_ffmpeg_command()
 
     log("[SYSTEM] Starting FFmpeg...")
-
-    log("[SYSTEM] Video: COPY")
-
     log("[SYSTEM] Video Encode: OFF")
-
-    log("[SYSTEM] Audio: AAC 128k")
-
     log("[SYSTEM] Sending YouTube -> Restream...")
 
     try:
@@ -534,22 +593,14 @@ def start_session():
 
         return False
 
-    # ========================================================
-    # CLOSE PARENT COPY
-    # ========================================================
-
+    # Parent doesn't need this descriptor anymore.
     try:
 
         if streamlink_process.stdout:
-
             streamlink_process.stdout.close()
 
     except Exception:
         pass
-
-    # ========================================================
-    # CHECK
-    # ========================================================
 
     time.sleep(3)
 
@@ -558,7 +609,7 @@ def start_session():
         code = ffmpeg_process.returncode
 
         log(
-            "[ERROR] FFmpeg exited immediately "
+            "[ERROR] FFmpeg exited "
             f"(exit code: {code})"
         )
 
@@ -566,13 +617,17 @@ def start_session():
 
         return False
 
-    log("[SYSTEM] YouTube -> FFmpeg: CONNECTED")
+    log(
+        "[SYSTEM] YouTube -> FFmpeg: CONNECTED"
+    )
 
-    log("[SYSTEM] FFmpeg -> Restream: CONNECTED")
+    log(
+        "[SYSTEM] FFmpeg -> Restream: CONNECTED"
+    )
 
-    log("[SYSTEM] FFmpeg process is alive.")
-
-    log("[SYSTEM] Stream is RUNNING.")
+    log(
+        "[SYSTEM] Stream is RUNNING."
+    )
 
     return True
 
@@ -592,13 +647,11 @@ def monitor_session():
 
         time.sleep(2)
 
-        # ====================================================
+        # ----------------------------------------------------
         # STREAMLINK
-        # ====================================================
+        # ----------------------------------------------------
 
         if streamlink_process is None:
-
-            log("[SYSTEM] Streamlink process missing.")
 
             return False
 
@@ -608,8 +661,6 @@ def monitor_session():
 
         if streamlink_code is not None:
 
-            log("")
-
             log(
                 "[SYSTEM] Streamlink stopped "
                 f"(exit code: {streamlink_code})"
@@ -617,13 +668,11 @@ def monitor_session():
 
             return False
 
-        # ====================================================
+        # ----------------------------------------------------
         # FFMPEG
-        # ====================================================
+        # ----------------------------------------------------
 
         if ffmpeg_process is None:
-
-            log("[SYSTEM] FFmpeg process missing.")
 
             return False
 
@@ -633,8 +682,6 @@ def monitor_session():
 
         if ffmpeg_code is not None:
 
-            log("")
-
             log(
                 "[SYSTEM] FFmpeg stopped "
                 f"(exit code: {ffmpeg_code})"
@@ -642,9 +689,9 @@ def monitor_session():
 
             return False
 
-        # ====================================================
+        # ----------------------------------------------------
         # HEARTBEAT
-        # ====================================================
+        # ----------------------------------------------------
 
         if time.time() - last_status >= 60:
 
@@ -677,38 +724,24 @@ def main():
 
     log(
         "Cookies        : "
-        f"{'ON' if cookies_file else 'OFF'}"
+        + ("ON" if cookies_file else "OFF")
     )
 
     log("Video          : COPY")
-
     log("Video Encode   : OFF")
-
     log("Crop           : OFF")
-
     log("Resize         : OFF")
-
     log("FPS Convert    : OFF")
-
     log("Audio          : AAC 128k")
-
     log("Memory Mode    : LOW")
-
     log("Auto-Reconnect : ON")
-
     log("Status         : STARTING")
 
     log("============================================================")
 
-    log("[SYSTEM] Starting 24/7 relay...")
-
     reconnect_delay = RECONNECT_DELAY
 
     while not shutdown_requested:
-
-        # ====================================================
-        # START
-        # ====================================================
 
         success = start_session()
 
@@ -716,8 +749,6 @@ def main():
             break
 
         if not success:
-
-            log("")
 
             log(
                 "[SYSTEM] Stream ended or connection lost."
@@ -739,26 +770,14 @@ def main():
 
             continue
 
-        # ====================================================
-        # SUCCESS
-        # ====================================================
-
+        # Successful connection:
+        # reset backoff.
         reconnect_delay = RECONNECT_DELAY
-
-        # ====================================================
-        # MONITOR
-        # ====================================================
 
         monitor_session()
 
         if shutdown_requested:
             break
-
-        # ====================================================
-        # RECONNECT
-        # ====================================================
-
-        log("")
 
         log(
             "[SYSTEM] Stream ended or connection lost."
@@ -782,15 +801,15 @@ if __name__ == "__main__":
 
     try:
 
-        # ----------------------------------------------------
-        # PREPARE COOKIES FIRST
-        # ----------------------------------------------------
-
         prepare_cookies()
 
-        # ----------------------------------------------------
-        # START
-        # ----------------------------------------------------
+        if not check_dependencies():
+
+            log(
+                "[FATAL] Required dependencies are missing."
+            )
+
+            raise SystemExit(1)
 
         main()
 
@@ -798,7 +817,9 @@ if __name__ == "__main__":
 
         shutdown_requested = True
 
-        log("[SYSTEM] Keyboard interrupt.")
+        log(
+            "[SYSTEM] Keyboard interrupt."
+        )
 
     except Exception as e:
 
@@ -816,4 +837,6 @@ if __name__ == "__main__":
 
         remove_cookies()
 
-        log("[SYSTEM] Relay stopped.")
+        log(
+            "[SYSTEM] Relay stopped."
+        )
