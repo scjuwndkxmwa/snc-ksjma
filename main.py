@@ -11,18 +11,18 @@ import threading
 # SETTINGS & CONFIGURATION
 # ============================================================
 
-RESTREAM_STREAM_KEY = "re_12012590_event333a4548cabc4367b4154e3ccbd1a7f9"[cite: 1]
+RESTREAM_STREAM_KEY = "re_12012590_event333a4548cabc4367b4154e3ccbd1a7f9"
 RESTREAM_URL = f"rtmp://live.restream.io/live/{RESTREAM_STREAM_KEY}"
 
 VIDEOS = [
-    "https://youtu.be/pNd2amw7ZAo",[cite: 1]
-    "https://youtu.be/tFA3mH8kTJ0",[cite: 1]
-    "https://youtu.be/UWzGxlZWimE",[cite: 1]
-    "https://youtu.be/iCnj6QwmtwA",[cite: 1]
-    "https://youtu.be/03cpj3iwNnY",[cite: 1]
-    "https://youtu.be/RHnm5zuprrk",[cite: 1]
-    "https://youtu.be/UfiLhGZ9J-A",[cite: 1]
-    "https://youtu.be/6Pc97lWbxN8",[cite: 1]
+    "https://youtu.be/pNd2amw7ZAo",
+    "https://youtu.be/tFA3mH8kTJ0",
+    "https://youtu.be/UWzGxlZWimE",
+    "https://youtu.be/iCnj6QwmtwA",
+    "https://youtu.be/03cpj3iwNnY",
+    "https://youtu.be/RHnm5zuprrk",
+    "https://youtu.be/UfiLhGZ9J-A",
+    "https://youtu.be/6Pc97lWbxN8",
 ]
 
 TARGET_WIDTH = 1280
@@ -31,13 +31,13 @@ TARGET_FPS = 30
 VIDEO_BITRATE = "2500k"
 AUDIO_BITRATE = "128k"
 
-COOKIES_B64 = os.getenv("YOUTUBE_COOKIES_B64", "").strip()[cite: 1]
-COOKIE_FILE = "/tmp/youtube_cookies.txt"[cite: 1]
-RECONNECT_DELAY = 5[cite: 1]
+COOKIES_B64 = os.getenv("YOUTUBE_COOKIES_B64", "").strip()
+COOKIE_FILE = "/tmp/youtube_cookies.txt"
+RECONNECT_DELAY = 5
 
-ffmpeg_process = None[cite: 1]
-current_streamlink = None[cite: 1]
-shutdown_requested = False[cite: 1]
+ffmpeg_process = None
+current_streamlink = None
+shutdown_requested = False
 
 # ============================================================
 # LOGGING & SIGNALS
@@ -55,8 +55,8 @@ def shutdown_handler(signum, frame):
     stop_streamlink()
     stop_ffmpeg()
 
-signal.signal(signal.SIGTERM, shutdown_handler)[cite: 1]
-signal.signal(signal.SIGINT, shutdown_handler)[cite: 1]
+signal.signal(signal.SIGTERM, shutdown_handler)
+signal.signal(signal.SIGINT, shutdown_handler)
 
 # ============================================================
 # UTILITIES
@@ -80,13 +80,13 @@ def find_executable(name):
     path = shutil.which(name)
     if path:
         return path
-    for p in [f"/usr/local/bin/{name}", f"/usr/bin/{name}", f"/opt/venv/bin/{name}"]:[cite: 1]
+    for p in [f"/usr/local/bin/{name}", f"/usr/bin/{name}", f"/opt/venv/bin/{name}"]:
         if os.path.exists(p):
             return p
     return None
 
-STREAMLINK = find_executable("streamlink")[cite: 1]
-FFMPEG = find_executable("ffmpeg")[cite: 1]
+STREAMLINK = find_executable("streamlink")
+FFMPEG = find_executable("ffmpeg")
 
 # ============================================================
 # FFMPEG MANAGEMENT
