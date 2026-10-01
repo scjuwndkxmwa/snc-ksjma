@@ -178,10 +178,12 @@ def stream_one_video(index, url, cookie_file):
     log(f"[PLAYLIST] URL: {url}")
     log("=" * 60)
 
+    # إعداادات Streamlink للحصول على أعلى جودة متاحة ومنع حظر يوتيوب
     cmd = [
         STREAMLINK,
         "--stdout",
         "--loglevel", "info",
+        "--stream-player-client-default", "android,web",
         "--hls-live-edge", "3",
         "--stream-segment-threads", "2",
         "--stream-timeout", "60",
@@ -192,7 +194,7 @@ def stream_one_video(index, url, cookie_file):
     if cookie_file:
         cmd.extend(["--http-cookie", f"cookie-file={cookie_file}"])
 
-    cmd.extend([url, "best"])
+    cmd.extend([url, "720p,1080p,best"])
 
     try:
         current_streamlink = subprocess.Popen(
@@ -218,6 +220,9 @@ def stream_one_video(index, url, cookie_file):
 
     threading.Thread(target=read_stderr, daemon=True).start()
 
+    bytes_sent = 0
+    last_log_time = time.time()
+
     try:
         while not shutdown_requested:
             chunk = current_streamlink.stdout.read(64 * 1024)
@@ -230,6 +235,13 @@ def stream_one_video(index, url, cookie_file):
 
             ffmpeg_process.stdin.write(chunk)
             ffmpeg_process.stdin.flush()
+
+            bytes_sent += len(chunk)
+            # طباعة حالة البث كل 30 ثانية لتأكيد العمل ومتابعة حجم البيانات
+            if time.time() - last_log_time > 30:
+                mb_sent = round(bytes_sent / (1024 * 1024), 2)
+                log(f"[STREAMING...] Active -> Sent ~{mb_sent} MB to Restream")
+                last_log_time = time.time()
 
     except BrokenPipeError:
         log("[WARNING] Pipe broken, restarting stream pipeline...")
