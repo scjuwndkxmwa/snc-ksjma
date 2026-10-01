@@ -1,24 +1,25 @@
+```python
 import os
 import time
 import signal
 import subprocess
-import base64
-import threading
+import sys
 from pathlib import Path
 
-
 # ============================================================
-# CONFIG
+# SETTINGS
 # ============================================================
 
-YOUTUBE_PLAYLIST_URL = (
-    "https://youtube.com/playlist?list="
-    "PLHevKCZsj31yChzIFaLbYvTlMsqAft51L"
-)
-
-PLAYLIST_LOOP = True
-PLAYLIST_REFRESH_EVERY_LOOP = True
-
+VIDEOS = [
+    "https://youtu.be/pNd2amw7ZAo",
+    "https://youtu.be/tFA3mH8kTJ0",
+    "https://youtu.be/UWzGxlZWimE",
+    "https://youtu.be/iCnj6QwmtwA",
+    "https://youtu.be/03cpj3iwNnY",
+    "https://youtu.be/RHnm5zuprrk",
+    "https://youtu.be/UfiLhGZ9J-A",
+    "https://youtu.be/6Pc97lWbxN8",
+]
 
 # ============================================================
 # RESTREAM
@@ -32,93 +33,58 @@ RESTREAM_RTMP = (
     f"rtmp://live.restream.io/live/{RESTREAM_STREAM_KEY}"
 )
 
-
 # ============================================================
-# STREAM
+# QUALITY
 # ============================================================
 
-QUALITY = "best"
-
-RINGBUFFER_SIZE = "32M"
-
-HLS_LIVE_EDGE = "3"
-
-RETRY_STREAMS = "5"
-RETRY_MAX = "0"
-
-SEGMENT_ATTEMPTS = "5"
-SEGMENT_THREADS = "1"
-SEGMENT_TIMEOUT = "20"
-
-STREAM_TIMEOUT = "60"
-
-PLAYLIST_RELOAD_ATTEMPTS = "8"
-
-
-# ============================================================
-# AUDIO
-# ============================================================
+# Highest available video up to 1080p
+VIDEO_FORMAT = (
+    "bestvideo[height<=1080]+bestaudio/"
+    "best[height<=1080]/"
+    "bestvideo+bestaudio/"
+    "best"
+)
 
 AUDIO_BITRATE = "128k"
 AUDIO_RATE = "44100"
 AUDIO_CHANNELS = "2"
 
-
 # ============================================================
-# RECONNECT
-# ============================================================
-
-RECONNECT_DELAY = 5
-MAX_RECONNECT_DELAY = 60
-
-VIDEO_RETRIES = 3
-
-BETWEEN_VIDEOS_DELAY = 3
-
-
-# ============================================================
-# PLAYLIST
+# STORAGE
 # ============================================================
 
-PLAYLIST_COMMAND_TIMEOUT = 120
+MEDIA_DIR = Path("/tmp/youtube_playlist")
 
-PLAYLIST_CACHE_PATH = (
-    "/tmp/youtube_playlist_cache.txt"
+MEDIA_DIR.mkdir(
+    parents=True,
+    exist_ok=True
 )
 
-
 # ============================================================
-# COOKIES
-# ============================================================
-
-COOKIES_PATH = (
-    "/tmp/youtube_cookies.txt"
-)
-
-
-# ============================================================
-# GLOBALS
+# DOWNLOAD SETTINGS
 # ============================================================
 
-streamlink_process = None
-ffmpeg_process = None
+DOWNLOAD_RETRIES = 10
+FRAGMENT_RETRIES = 10
+SOCKET_TIMEOUT = 30
+
+# ============================================================
+# LOOP
+# ============================================================
+
+BETWEEN_VIDEOS = 1
+RETRY_DELAY = 10
 
 shutdown_requested = False
-
-cookies_file = None
-
-last_data_time = 0
-data_received = False
-
-data_lock = threading.Lock()
+ffmpeg_process = None
 
 
 # ============================================================
 # LOG
 # ============================================================
 
-def log(text=""):
-    print(text, flush=True)
+def log(message=""):
+    print(message, flush=True)
 
 
 # ============================================================
@@ -126,13 +92,14 @@ def log(text=""):
 # ============================================================
 
 def handle_signal(signum, frame):
-
     global shutdown_requested
 
     shutdown_requested = True
 
     log("")
+    log("=" * 70)
     log("[SYSTEM] Shutdown requested...")
+    log("=" * 70)
 
 
 signal.signal(
@@ -147,486 +114,248 @@ signal.signal(
 
 
 # ============================================================
-# COOKIES
+# RUN COMMAND
 # ============================================================
 
-def prepare_youtube_cookies():
+def run_command(command):
 
-    global cookies_file
-
-    encoded = os.environ.get(
-        "YOUTUBE_COOKIES_B64",
-        ""
-    ).strip()
-
-    if not encoded:
-
-        log("[SYSTEM] YouTube Cookies: OFF")
-
-        return None
+    log("")
+    log("[COMMAND]")
+    log(" ".join(command))
+    log("")
 
     try:
-
-        decoded = base64.b64decode(
-            encoded,
-            validate=True
+        result = subprocess.run(
+            command,
+            stdout=subprocess.PIPE,
+            stderr=None,
+            text=True
         )
 
-        if not decoded:
-
-            raise ValueError(
-                "Cookie data is empty."
-            )
-
-        path = COOKIES_PATH
-
-        with open(path, "wb") as f:
-            f.write(decoded)
-
-        with open(
-            path,
-            "r",
-            encoding="utf-8",
-            errors="ignore"
-        ) as f:
-
-            first_lines = f.read(4096)
-
-        if (
-            "# Netscape HTTP Cookie File"
-            not in first_lines
-            and
-            "# HTTP Cookie File"
-            not in first_lines
-        ):
-
-            log(
-                "[WARNING] Cookie file does not "
-                "look like a Netscape cookies.txt file."
-            )
-
-        cookies_file = path
-
-        log("[SYSTEM] YouTube Cookies: ON")
-        log("[SYSTEM] Cookie file prepared.")
-
-        return path
+        return result.returncode
 
     except Exception as e:
 
         log(
-            "[ERROR] Could not decode "
-            f"YOUTUBE_COOKIES_B64: {e}"
+            f"[ERROR] Command failed: {e}"
         )
 
-        return None
+        return -1
 
 
 # ============================================================
-# STOP PROCESS
+# GET VIDEO FILE
 # ============================================================
 
-def stop_process(process, name):
+def get_video_file(index, url):
 
-    if process is None:
-        return
+    output_template = str(
+        MEDIA_DIR / f"video_{index:02d}.%(ext)s"
+    )
 
-    try:
+    # Existing files
+    existing = list(
+        MEDIA_DIR.glob(
+            f"video_{index:02d}.*"
+        )
+    )
 
-        if process.poll() is None:
+    if existing:
+
+        # Ignore temporary files
+        valid = [
+            p for p in existing
+            if not p.name.endswith(".part")
+        ]
+
+        if valid:
 
             log(
-                f"[SYSTEM] Stopping {name}..."
+                f"[VIDEO {index}] "
+                f"Using cached file: {valid[0]}"
             )
 
-            try:
-                process.terminate()
-            except Exception:
-                pass
+            return valid[0]
 
-            try:
-
-                process.wait(
-                    timeout=5
-                )
-
-            except subprocess.TimeoutExpired:
-
-                log(
-                    f"[SYSTEM] Killing {name}..."
-                )
-
-                try:
-                    process.kill()
-                except Exception:
-                    pass
-
-                try:
-                    process.wait(
-                        timeout=3
-                    )
-                except Exception:
-                    pass
-
-    except Exception as e:
-
-        log(
-            f"[SYSTEM] Error stopping "
-            f"{name}: {e}"
-        )
-
-
-# ============================================================
-# STOP ALL
-# ============================================================
-
-def stop_all():
-
-    global streamlink_process
-    global ffmpeg_process
-
-    if ffmpeg_process is not None:
-
-        stop_process(
-            ffmpeg_process,
-            "FFmpeg"
-        )
-
-    ffmpeg_process = None
-
-    if streamlink_process is not None:
-
-        stop_process(
-            streamlink_process,
-            "Streamlink"
-        )
-
-    streamlink_process = None
-
-
-# ============================================================
-# YT-DLP PLAYLIST COMMAND
-# ============================================================
-
-def build_playlist_command():
+    log("")
+    log("=" * 70)
+    log(
+        f"[VIDEO {index}] Downloading highest available quality"
+    )
+    log(f"[VIDEO {index}] {url}")
+    log("=" * 70)
 
     command = [
-
         "yt-dlp",
 
-        "--flat-playlist",
+        "--no-playlist",
 
-        "--ignore-errors",
+        "--format",
+        VIDEO_FORMAT,
 
-        "--no-warnings",
+        "--merge-output-format",
+        "mkv",
 
-        "--skip-download",
+        "--retries",
+        str(DOWNLOAD_RETRIES),
 
-        "--print",
-        "%(id)s"
+        "--fragment-retries",
+        str(FRAGMENT_RETRIES),
+
+        "--socket-timeout",
+        str(SOCKET_TIMEOUT),
+
+        "--concurrent-fragments",
+        "2",
+
+        "--no-part",
+
+        "--output",
+        output_template,
+
+        url
     ]
 
-    if cookies_file:
-
-        command.extend(
-            [
-                "--cookies",
-                cookies_file
-            ]
-        )
-
-    command.append(
-        YOUTUBE_PLAYLIST_URL
+    return_code = run_command(
+        command
     )
 
-    return command
-
-
-# ============================================================
-# LOAD PLAYLIST CACHE
-# ============================================================
-
-def load_playlist_cache():
-
-    path = Path(
-        PLAYLIST_CACHE_PATH
-    )
-
-    if not path.exists():
-        return []
-
-    try:
-
-        items = []
-
-        with open(
-            path,
-            "r",
-            encoding="utf-8"
-        ) as f:
-
-            for line in f:
-
-                video_id = line.strip()
-
-                if not video_id:
-                    continue
-
-                if video_id in items:
-                    continue
-
-                items.append(video_id)
-
-        return items
-
-    except Exception as e:
+    if return_code != 0:
 
         log(
-            "[WARNING] Could not read "
-            f"playlist cache: {e}"
+            f"[VIDEO {index}] "
+            "Download failed."
         )
 
-        return []
+        return None
+
+    files = list(
+        MEDIA_DIR.glob(
+            f"video_{index:02d}.*"
+        )
+    )
+
+    valid = [
+        p for p in files
+        if not p.name.endswith(".part")
+    ]
+
+    if not valid:
+
+        log(
+            f"[VIDEO {index}] "
+            "Downloaded file not found."
+        )
+
+        return None
+
+    return valid[0]
 
 
 # ============================================================
-# SAVE PLAYLIST CACHE
+# DOWNLOAD ALL VIDEOS
 # ============================================================
 
-def save_playlist_cache(items):
+def prepare_videos():
+
+    log("")
+    log("=" * 70)
+    log("       PREPARING 8 YOUTUBE VIDEOS")
+    log("=" * 70)
+
+    video_files = []
+
+    for index, url in enumerate(
+        VIDEOS,
+        start=1
+    ):
+
+        if shutdown_requested:
+            return []
+
+        file_path = get_video_file(
+            index,
+            url
+        )
+
+        if file_path is None:
+
+            log(
+                f"[VIDEO {index}] "
+                "Could not prepare video."
+            )
+
+            return []
+
+        video_files.append(
+            file_path
+        )
+
+    log("")
+    log("=" * 70)
+    log(
+        f"[SYSTEM] All {len(video_files)} videos are ready."
+    )
+    log("=" * 70)
+
+    return video_files
+
+
+# ============================================================
+# CREATE CONCAT FILE
+# ============================================================
+
+def create_concat_file(video_files):
+
+    concat_file = (
+        MEDIA_DIR / "playlist.txt"
+    )
 
     try:
 
         with open(
-            PLAYLIST_CACHE_PATH,
+            concat_file,
             "w",
             encoding="utf-8"
         ) as f:
 
-            for video_id in items:
+            for video in video_files:
 
-                f.write(
-                    video_id + "\n"
+                path = str(
+                    video
+                ).replace(
+                    "\\",
+                    "/"
                 )
 
-    except Exception as e:
+                path = path.replace(
+                    "'",
+                    "'\\''"
+                )
 
-        log(
-            "[WARNING] Could not save "
-            f"playlist cache: {e}"
-        )
+                f.write(
+                    f"file '{path}'\n"
+                )
 
-
-# ============================================================
-# GET PLAYLIST ITEMS
-# ============================================================
-
-def get_playlist_items():
-
-    log("")
-    log("=" * 60)
-    log("[PLAYLIST] Reading YouTube Playlist...")
-    log("=" * 60)
-
-    command = build_playlist_command()
-
-    try:
-
-        result = subprocess.run(
-
-            command,
-
-            stdout=subprocess.PIPE,
-
-            stderr=subprocess.PIPE,
-
-            text=True,
-
-            encoding="utf-8",
-
-            errors="replace",
-
-            timeout=PLAYLIST_COMMAND_TIMEOUT
-        )
-
-    except subprocess.TimeoutExpired:
-
-        log(
-            "[PLAYLIST] yt-dlp timed out."
-        )
-
-        cached = load_playlist_cache()
-
-        if cached:
-
-            log(
-                "[PLAYLIST] Using cached list: "
-                f"{len(cached)} videos."
-            )
-
-            return cached
-
-        return []
+        return concat_file
 
     except Exception as e:
 
         log(
-            "[PLAYLIST] yt-dlp error: "
-            f"{e}"
+            f"[ERROR] "
+            f"Could not create concat file: {e}"
         )
 
-        cached = load_playlist_cache()
-
-        if cached:
-
-            log(
-                "[PLAYLIST] Using cached list: "
-                f"{len(cached)} videos."
-            )
-
-            return cached
-
-        return []
-
-    items = []
-
-    for line in result.stdout.splitlines():
-
-        video_id = line.strip()
-
-        if not video_id:
-            continue
-
-        if len(video_id) < 6:
-            continue
-
-        if video_id in items:
-            continue
-
-        items.append(video_id)
-
-    if items:
-
-        save_playlist_cache(items)
-
-        log(
-            "[PLAYLIST] Found "
-            f"{len(items)} videos."
-        )
-
-        return items
-
-    if result.stderr:
-
-        log(
-            "[PLAYLIST] yt-dlp did not "
-            "return playlist items."
-        )
-
-    cached = load_playlist_cache()
-
-    if cached:
-
-        log(
-            "[PLAYLIST] Using previous "
-            f"cache: {len(cached)} videos."
-        )
-
-        return cached
-
-    log(
-        "[PLAYLIST] No videos found."
-    )
-
-    return []
+        return None
 
 
 # ============================================================
-# VIDEO URL
+# BUILD FFMPEG
 # ============================================================
 
-def make_video_url(video_id):
-
-    return (
-        "https://www.youtube.com/watch?v="
-        + video_id
-    )
-
-
-# ============================================================
-# STREAMLINK COMMAND
-# ============================================================
-
-def build_streamlink_command(video_url):
-
-    command = [
-
-        "streamlink",
-
-        "--loglevel",
-        "info",
-
-        "--retry-streams",
-        RETRY_STREAMS,
-
-        "--retry-max",
-        RETRY_MAX,
-
-        "--retry-open",
-        "5",
-
-        "--ringbuffer-size",
-        RINGBUFFER_SIZE,
-
-        "--hls-live-edge",
-        HLS_LIVE_EDGE,
-
-        "--hls-playlist-reload-attempts",
-        PLAYLIST_RELOAD_ATTEMPTS,
-
-        "--stream-segment-attempts",
-        SEGMENT_ATTEMPTS,
-
-        "--stream-segment-threads",
-        SEGMENT_THREADS,
-
-        "--stream-segment-timeout",
-        SEGMENT_TIMEOUT,
-
-        "--stream-timeout",
-        STREAM_TIMEOUT,
-
-        "--stdout",
-
-        video_url,
-
-        QUALITY
-    ]
-
-    if cookies_file:
-
-        stdout_index = command.index(
-            "--stdout"
-        )
-
-        command.insert(
-            stdout_index,
-            cookies_file
-        )
-
-        command.insert(
-            stdout_index,
-            "--http-cookies-file"
-        )
-
-    return command
-
-
-# ============================================================
-# FFMPEG COMMAND
-# ============================================================
-
-def build_ffmpeg_command():
+def build_ffmpeg_command(
+    concat_file
+):
 
     return [
 
@@ -639,20 +368,34 @@ def build_ffmpeg_command():
 
         "-stats",
 
-        "-thread_queue_size",
-        "64",
+        "-re",
+
+        "-f",
+        "concat",
+
+        "-safe",
+        "0",
+
+        "-stream_loop",
+        "-1",
 
         "-i",
-        "-",
+        str(concat_file),
 
-        # VIDEO COPY
+        # -------------------------
+        # VIDEO
+        # -------------------------
+
         "-map",
         "0:v:0",
 
         "-c:v",
         "copy",
 
+        # -------------------------
         # AUDIO
+        # -------------------------
+
         "-map",
         "0:a:0?",
 
@@ -668,23 +411,23 @@ def build_ffmpeg_command():
         "-ac",
         AUDIO_CHANNELS,
 
-        "-af",
-        "aresample="
-        "async=1000:"
-        "min_hard_comp=0.100:"
-        "first_pts=0",
-
+        # -------------------------
         # TIMESTAMPS
+        # -------------------------
+
         "-fflags",
         "+genpts+discardcorrupt",
 
-        "-err_detect",
-        "ignore_err",
+        "-avoid_negative_ts",
+        "make_zero",
 
         "-max_interleave_delta",
         "0",
 
-        # OUTPUT
+        # -------------------------
+        # FLV / RTMP
+        # -------------------------
+
         "-f",
         "flv",
 
@@ -693,587 +436,150 @@ def build_ffmpeg_command():
 
 
 # ============================================================
-# STREAMLINK -> FFMPEG PIPE
+# START BROADCAST
 # ============================================================
 
-def pipe_streamlink_to_ffmpeg():
-
-    global last_data_time
-    global data_received
-
-    try:
-
-        while not shutdown_requested:
-
-            if streamlink_process is None:
-                break
-
-            if ffmpeg_process is None:
-                break
-
-            stdout = (
-                streamlink_process.stdout
-            )
-
-            stdin = (
-                ffmpeg_process.stdin
-            )
-
-            if stdout is None:
-                break
-
-            if stdin is None:
-                break
-
-            data = stdout.read(
-                64 * 1024
-            )
-
-            if not data:
-                break
-
-            try:
-
-                stdin.write(data)
-                stdin.flush()
-
-            except (
-                BrokenPipeError,
-                OSError
-            ):
-
-                break
-
-            with data_lock:
-
-                last_data_time = (
-                    time.time()
-                )
-
-                data_received = True
-
-    except Exception as e:
-
-        if not shutdown_requested:
-
-            log(
-                f"[PIPE] Error: {e}"
-            )
-
-    finally:
-
-        try:
-
-            if (
-                ffmpeg_process is not None
-                and
-                ffmpeg_process.stdin
-            ):
-
-                ffmpeg_process.stdin.close()
-
-        except Exception:
-            pass
-
-
-# ============================================================
-# START VIDEO SESSION
-# ============================================================
-
-def start_video_session(
-    video_id,
-    video_number,
-    total_videos
+def start_broadcast(
+    concat_file
 ):
 
-    global streamlink_process
     global ffmpeg_process
-    global last_data_time
-    global data_received
 
-    video_url = make_video_url(
-        video_id
+    command = build_ffmpeg_command(
+        concat_file
     )
-
-    stop_all()
-
-    with data_lock:
-
-        last_data_time = time.time()
-        data_received = False
 
     log("")
-    log("=" * 60)
+    log("=" * 70)
+    log("       STARTING ONE CONTINUOUS BROADCAST")
+    log("=" * 70)
 
+    log("[SYSTEM] Destination : Restream")
+    log("[SYSTEM] Videos      : 8")
+    log("[SYSTEM] Order       : 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7 -> 8")
+    log("[SYSTEM] Loop        : 8 -> 1")
+    log("[SYSTEM] Video       : COPY")
+    log("[SYSTEM] Video Encode: OFF")
     log(
-        f"[VIDEO] {video_number}/{total_videos}"
+        f"[SYSTEM] Audio       : AAC {AUDIO_BITRATE}"
     )
-
-    log(
-        f"[VIDEO] ID: {video_id}"
-    )
-
-    log(
-        f"[VIDEO] URL: {video_url}"
-    )
-
-    log("=" * 60)
-
-    command = build_streamlink_command(
-        video_url
-    )
-
-    log(
-        "[SYSTEM] Starting Streamlink..."
-    )
-
-    log(
-        f"[SYSTEM] Quality: {QUALITY.upper()}"
-    )
-
-    log(
-        "[SYSTEM] Video: COPY"
-    )
-
-    log(
-        "[SYSTEM] Video Encode: OFF"
-    )
-
-    log(
-        f"[SYSTEM] Audio: AAC {AUDIO_BITRATE}"
-    )
-
-    log(
-        "[SYSTEM] Memory Mode: LOW"
-    )
-
-    if cookies_file:
-
-        log(
-            "[SYSTEM] YouTube Cookies: ON"
-        )
-
-    else:
-
-        log(
-            "[SYSTEM] YouTube Cookies: OFF"
-        )
-
-    log(
-        "[SYSTEM] Waiting for YouTube..."
-    )
-
-    try:
-
-        streamlink_process = subprocess.Popen(
-
-            command,
-
-            stdout=subprocess.PIPE,
-
-            stderr=None,
-
-            stdin=subprocess.DEVNULL,
-
-            bufsize=0
-        )
-
-    except Exception as e:
-
-        log(
-            "[ERROR] Could not start "
-            f"Streamlink: {e}"
-        )
-
-        streamlink_process = None
-
-        return False
-
-    time.sleep(3)
-
-    if shutdown_requested:
-
-        stop_all()
-
-        return False
-
-    if (
-        streamlink_process.poll()
-        is not None
-    ):
-
-        code = (
-            streamlink_process.returncode
-        )
-
-        log(
-            "[ERROR] Streamlink exited "
-            f"(exit code: {code})"
-        )
-
-        streamlink_process = None
-
-        return False
-
-    log(
-        "[SYSTEM] Streamlink process is alive."
-    )
-
-    # ========================================================
-    # FFMPEG
-    # ========================================================
-
-    ffmpeg_command = (
-        build_ffmpeg_command()
-    )
-
-    log(
-        "[SYSTEM] Starting FFmpeg..."
-    )
-
-    log(
-        "[SYSTEM] Video: COPY"
-    )
-
-    log(
-        "[SYSTEM] Video Encode: OFF"
-    )
-
-    log(
-        f"[SYSTEM] Audio: AAC {AUDIO_BITRATE}"
-    )
-
-    log(
-        "[SYSTEM] Sending YouTube -> Restream..."
-    )
+    log("[SYSTEM] Resolution  : Highest available <= 1080p")
+    log("[SYSTEM] RTMP        : ONE CONTINUOUS CONNECTION")
+    log("=" * 70)
 
     try:
 
         ffmpeg_process = subprocess.Popen(
+            command,
 
-            ffmpeg_command,
-
-            stdin=subprocess.PIPE,
+            stdin=subprocess.DEVNULL,
 
             stdout=subprocess.DEVNULL,
 
-            stderr=None,
-
-            bufsize=0
+            stderr=None
         )
 
     except Exception as e:
 
         log(
-            "[ERROR] Could not start "
-            f"FFmpeg: {e}"
+            f"[ERROR] "
+            f"Could not start FFmpeg: {e}"
         )
 
-        stop_all()
+        ffmpeg_process = None
 
         return False
 
-    # ========================================================
-    # PIPE
-    # ========================================================
-
-    pipe_thread = threading.Thread(
-        target=pipe_streamlink_to_ffmpeg,
-        daemon=True
+    log("")
+    log(
+        "[SYSTEM] FFmpeg started."
     )
 
-    pipe_thread.start()
+    log(
+        "[SYSTEM] YouTube -> FFmpeg -> Restream"
+    )
 
-    # ========================================================
-    # WAIT FOR REAL DATA
-    # ========================================================
+    log(
+        "[SYSTEM] ONE BROADCAST SESSION"
+    )
 
-    start_wait = time.time()
+    log("")
 
     while not shutdown_requested:
 
-        time.sleep(1)
+        time.sleep(5)
 
-        if (
-            ffmpeg_process is None
-            or
-            ffmpeg_process.poll()
-            is not None
-        ):
+        if ffmpeg_process.poll() is not None:
 
             code = (
                 ffmpeg_process.returncode
-                if ffmpeg_process is not None
-                else "unknown"
+            )
+
+            log("")
+            log(
+                "[ERROR] FFmpeg stopped."
             )
 
             log(
-                "[ERROR] FFmpeg exited "
-                f"(exit code: {code})"
+                f"[ERROR] Exit code: {code}"
             )
 
             return False
-
-        if (
-            streamlink_process is None
-            or
-            streamlink_process.poll()
-            is not None
-        ):
-
-            code = (
-                streamlink_process.returncode
-                if streamlink_process is not None
-                else "unknown"
-            )
-
-            log(
-                "[ERROR] Streamlink exited "
-                f"(exit code: {code})"
-            )
-
-            return False
-
-        with data_lock:
-
-            received = data_received
-
-        if received:
-
-            log(
-                "[SYSTEM] YouTube -> FFmpeg: CONNECTED"
-            )
-
-            log(
-                "[SYSTEM] FFmpeg -> Restream: CONNECTED"
-            )
-
-            log(
-                "[SYSTEM] Stream is RUNNING."
-            )
-
-            return True
-
-        if (
-            time.time() - start_wait
-            >= 120
-        ):
-
-            log(
-                "[ERROR] No stream data "
-                "received for 120 seconds."
-            )
-
-            return False
-
-    return False
-
-
-# ============================================================
-# MONITOR
-# ============================================================
-
-def monitor_video():
-
-    global streamlink_process
-    global ffmpeg_process
-
-    last_heartbeat = time.time()
-
-    while not shutdown_requested:
-
-        time.sleep(3)
-
-        # STREAMLINK
-        if streamlink_process is None:
-
-            log(
-                "[ERROR] Streamlink process missing."
-            )
-
-            return False
-
-        streamlink_code = (
-            streamlink_process.poll()
-        )
-
-        if streamlink_code is not None:
-
-            log(
-                "[SYSTEM] Streamlink stopped "
-                f"(exit code: {streamlink_code})"
-            )
-
-            return False
-
-        # FFMPEG
-        if ffmpeg_process is None:
-
-            log(
-                "[ERROR] FFmpeg process missing."
-            )
-
-            return False
-
-        ffmpeg_code = (
-            ffmpeg_process.poll()
-        )
-
-        if ffmpeg_code is not None:
-
-            log(
-                "[SYSTEM] FFmpeg stopped "
-                f"(exit code: {ffmpeg_code})"
-            )
-
-            return False
-
-        # DATA WATCHDOG
-        with data_lock:
-
-            current_last_data = (
-                last_data_time
-            )
-
-            received = data_received
-
-        if received:
-
-            no_data_for = (
-                time.time()
-                - current_last_data
-            )
-
-            if no_data_for >= 120:
-
-                log(
-                    "[ERROR] No data received "
-                    f"for {int(no_data_for)} seconds."
-                )
-
-                return False
-
-        # HEARTBEAT
-        if (
-            time.time()
-            - last_heartbeat
-            >= 60
-        ):
-
-            log(
-                "[SYSTEM] Relay is still RUNNING."
-            )
-
-            last_heartbeat = time.time()
-
-    return False
-
-
-# ============================================================
-# RUN VIDEO
-# ============================================================
-
-def run_video(
-    video_id,
-    video_number,
-    total_videos
-):
-
-    reconnect_delay = (
-        RECONNECT_DELAY
-    )
-
-    for attempt in range(
-        1,
-        VIDEO_RETRIES + 1
-    ):
-
-        if shutdown_requested:
-
-            return False
-
-        log("")
 
         log(
-            f"[VIDEO] Attempt "
-            f"{attempt}/{VIDEO_RETRIES}"
+            "[SYSTEM] Broadcast is RUNNING..."
         )
-
-        success = start_video_session(
-            video_id,
-            video_number,
-            total_videos
-        )
-
-        if shutdown_requested:
-
-            stop_all()
-
-            return False
-
-        if success:
-
-            reconnect_delay = (
-                RECONNECT_DELAY
-            )
-
-            monitor_video()
-
-            if shutdown_requested:
-
-                stop_all()
-
-                return False
-
-            # انتهاء طبيعي للفيديو
-            if (
-                streamlink_process is not None
-                and
-                streamlink_process.poll()
-                == 0
-            ):
-
-                log(
-                    "[VIDEO] Video finished normally."
-                )
-
-                stop_all()
-
-                return True
-
-        stop_all()
-
-        if attempt < VIDEO_RETRIES:
-
-            log(
-                "[VIDEO] Failed."
-            )
-
-            log(
-                f"[VIDEO] Retrying in "
-                f"{reconnect_delay} seconds..."
-            )
-
-            time.sleep(
-                reconnect_delay
-            )
-
-            reconnect_delay = min(
-                reconnect_delay * 2,
-                MAX_RECONNECT_DELAY
-            )
-
-    log(
-        "[VIDEO] Failed after all retries."
-    )
-
-    log(
-        "[VIDEO] Skipping this video."
-    )
-
-    stop_all()
 
     return True
+
+
+# ============================================================
+# STOP FFMPEG
+# ============================================================
+
+def stop_ffmpeg():
+
+    global ffmpeg_process
+
+    if ffmpeg_process is None:
+        return
+
+    try:
+
+        if ffmpeg_process.poll() is None:
+
+            log(
+                "[SYSTEM] Stopping FFmpeg..."
+            )
+
+            ffmpeg_process.terminate()
+
+            try:
+
+                ffmpeg_process.wait(
+                    timeout=10
+                )
+
+            except subprocess.TimeoutExpired:
+
+                log(
+                    "[SYSTEM] Killing FFmpeg..."
+                )
+
+                ffmpeg_process.kill()
+
+                ffmpeg_process.wait(
+                    timeout=5
+                )
+
+    except Exception as e:
+
+        log(
+            f"[SYSTEM] "
+            f"FFmpeg stop error: {e}"
+        )
+
+    ffmpeg_process = None
 
 
 # ============================================================
@@ -1284,240 +590,120 @@ def main():
 
     global shutdown_requested
 
-    log("=" * 60)
+    log("")
+    log("=" * 70)
+    log("       YOUTUBE 8 VIDEOS 24/7")
+    log("       -> ONE FFMPEG -> RESTREAM")
+    log("=" * 70)
 
-    log(
-        "       YouTube Playlist 24/7"
-    )
+    log("")
+    log("VIDEO ORDER:")
 
-    log(
-        "       -> Restream -> TikTok"
-    )
-
-    log("=" * 60)
-
-    log(
-        f"Playlist      : "
-        f"{YOUTUBE_PLAYLIST_URL}"
-    )
-
-    log(
-        "Destination    : Restream"
-    )
-
-    log(
-        "Playlist Mode  : LOOP 24/7"
-    )
-
-    log(
-        "Extractor      : Streamlink"
-    )
-
-    log(
-        "Cookies        : "
-        + (
-            "ON"
-            if cookies_file
-            else
-            "OFF"
-        )
-    )
-
-    log(
-        "Quality        : BEST"
-    )
-
-    log(
-        "Video          : COPY"
-    )
-
-    log(
-        "Video Encode   : OFF"
-    )
-
-    log(
-        "Crop           : OFF"
-    )
-
-    log(
-        "Resize         : OFF"
-    )
-
-    log(
-        "FPS Convert    : OFF"
-    )
-
-    log(
-        f"Audio          : AAC {AUDIO_BITRATE}"
-    )
-
-    log(
-        "Memory Mode    : LOW"
-    )
-
-    log(
-        "Auto-Reconnect : ON"
-    )
-
-    log(
-        "Status         : STARTING"
-    )
-
-    log("=" * 60)
-
-    # ========================================================
-    # INITIAL PLAYLIST
-    # ========================================================
-
-    playlist_items = []
-
-    while (
-        not playlist_items
-        and
-        not shutdown_requested
+    for index, url in enumerate(
+        VIDEOS,
+        start=1
     ):
 
-        playlist_items = (
-            get_playlist_items()
+        log(
+            f"  {index}. {url}"
         )
 
-        if playlist_items:
+    log("")
+    log(
+        "[SYSTEM] Highest quality: ENABLED"
+    )
 
-            break
+    log(
+        "[SYSTEM] Maximum resolution: 1080p"
+    )
+
+    log(
+        "[SYSTEM] Video copy: ENABLED"
+    )
+
+    log(
+        "[SYSTEM] Audio encode: AAC 128k"
+    )
+
+    log(
+        "[SYSTEM] Continuous RTMP: ENABLED"
+    )
+
+    log(
+        "[SYSTEM] 24/7 LOOP: ENABLED"
+    )
+
+    log("=" * 70)
+
+    # ---------------------------------
+    # Prepare videos
+    # ---------------------------------
+
+    video_files = prepare_videos()
+
+    if not video_files:
 
         log(
-            "[PLAYLIST] No playlist items."
+            "[ERROR] "
+            "Could not prepare videos."
         )
 
-        log(
-            "[PLAYLIST] Retrying in "
-            "30 seconds..."
+        return
+
+    # ---------------------------------
+    # Create concat playlist
+    # ---------------------------------
+
+    concat_file = create_concat_file(
+        video_files
+    )
+
+    if concat_file is None:
+
+        return
+
+    # ---------------------------------
+    # Start one continuous RTMP
+    # ---------------------------------
+
+    while not shutdown_requested:
+
+        success = start_broadcast(
+            concat_file
         )
-
-        time.sleep(30)
-
-    # ========================================================
-    # PLAYLIST LOOP
-    # ========================================================
-
-    playlist_round = 0
-
-    while (
-        not shutdown_requested
-        and
-        playlist_items
-    ):
-
-        playlist_round += 1
-
-        log("")
-        log("=" * 60)
-
-        log(
-            f"[PLAYLIST] Starting round "
-            f"#{playlist_round}"
-        )
-
-        log(
-            f"[PLAYLIST] Videos: "
-            f"{len(playlist_items)}"
-        )
-
-        log("=" * 60)
-
-        # ----------------------------------------------------
-        # PLAY VIDEOS IN ORDER
-        # ----------------------------------------------------
-
-        for index, video_id in enumerate(
-            playlist_items,
-            start=1
-        ):
-
-            if shutdown_requested:
-                break
-
-            log("")
-            log(
-                f"[PLAYLIST] Playing "
-                f"{index}/{len(playlist_items)}"
-            )
-
-            run_video(
-                video_id,
-                index,
-                len(playlist_items)
-            )
-
-            if shutdown_requested:
-                break
-
-            log(
-                f"[PLAYLIST] Waiting "
-                f"{BETWEEN_VIDEOS_DELAY} seconds..."
-            )
-
-            time.sleep(
-                BETWEEN_VIDEOS_DELAY
-            )
 
         if shutdown_requested:
             break
 
-        # ----------------------------------------------------
-        # REFRESH PLAYLIST
-        # ----------------------------------------------------
+        stop_ffmpeg()
 
-        if PLAYLIST_REFRESH_EVERY_LOOP:
-
-            log("")
-            log(
-                "[PLAYLIST] Refreshing playlist..."
-            )
-
-            new_items = (
-                get_playlist_items()
-            )
-
-            if new_items:
-
-                playlist_items = (
-                    new_items
-                )
-
-                log(
-                    "[PLAYLIST] Playlist updated."
-                )
-
-        # ----------------------------------------------------
-        # LOOP
-        # ----------------------------------------------------
-
-        if PLAYLIST_LOOP:
-
-            log("")
-            log("=" * 60)
+        if success:
 
             log(
-                "[PLAYLIST] Reached the end."
+                "[SYSTEM] Broadcast stopped."
             )
+
+        else:
 
             log(
-                "[PLAYLIST] Starting again "
-                "from the first video."
+                "[SYSTEM] Broadcast failed."
             )
 
-            log("=" * 60)
+        log(
+            f"[SYSTEM] Reconnecting in "
+            f"{RETRY_DELAY} seconds..."
+        )
 
-            continue
+        time.sleep(
+            RETRY_DELAY
+        )
 
-        break
+    stop_ffmpeg()
 
-    stop_all()
-
-    log(
-        "[SYSTEM] Relay stopped."
-    )
+    log("")
+    log("=" * 70)
+    log("[SYSTEM] Relay stopped.")
+    log("=" * 70)
 
 
 # ============================================================
@@ -1527,8 +713,6 @@ def main():
 if __name__ == "__main__":
 
     try:
-
-        prepare_youtube_cookies()
 
         main()
 
@@ -1543,23 +727,15 @@ if __name__ == "__main__":
     except Exception as e:
 
         log("")
-        log("=" * 60)
-
-        log(
-            "[SYSTEM] UNEXPECTED ERROR"
-        )
-
+        log("=" * 70)
+        log("[SYSTEM] UNEXPECTED ERROR")
         log(
             f"[SYSTEM] "
             f"{type(e).__name__}: {e}"
         )
-
-        log("=" * 60)
+        log("=" * 70)
 
     finally:
 
-        stop_all()
-
-        log(
-            "[SYSTEM] Relay stopped."
-        )
+        stop_ffmpeg()
+```
