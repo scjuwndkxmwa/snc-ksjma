@@ -28,7 +28,7 @@ VIDEOS = [
 TARGET_WIDTH = 1280
 TARGET_HEIGHT = 720
 TARGET_FPS = 30
-VIDEO_BITRATE = "2500k"
+VIDEO_BITRATE = "3500k"
 AUDIO_BITRATE = "128k"
 
 COOKIES_B64 = os.getenv("YOUTUBE_COOKIES_B64", "").strip()
@@ -36,7 +36,7 @@ COOKIE_FILE = "/tmp/youtube_cookies.txt"
 RECONNECT_DELAY = 5
 
 ffmpeg_process = None
-current_stream_proc = None
+current_streamlink = None
 shutdown_requested = False
 
 # ============================================================
@@ -52,7 +52,7 @@ def shutdown_handler(signum, frame):
         return
     shutdown_requested = True
     log("\n[SYSTEM] Shutdown initiated...")
-    stop_stream_proc()
+    stop_streamlink()
     stop_ffmpeg()
 
 signal.signal(signal.SIGTERM, shutdown_handler)
@@ -86,7 +86,6 @@ def find_executable(name):
     return None
 
 STREAMLINK = find_executable("streamlink")
-YTDLP = find_executable("yt-dlp")
 FFMPEG = find_executable("ffmpeg")
 
 # ============================================================
@@ -114,7 +113,7 @@ def start_ffmpeg():
         "-tune", "zerolatency",
         "-b:v", VIDEO_BITRATE,
         "-maxrate", VIDEO_BITRATE,
-        "-bufsize", "5000k",
+        "-bufsize", "7000k",
         "-g", str(TARGET_FPS * 2),
         "-c:a", "aac",
         "-b:a", AUDIO_BITRATE,
@@ -152,54 +151,25 @@ def stop_ffmpeg():
                 pass
         ffmpeg_process = None
 
-def stop_stream_proc():
-    global current_stream_proc
-    if current_stream_proc:
+def stop_streamlink():
+    global current_streamlink
+    if current_streamlink:
         try:
-            current_stream_proc.terminate()
-            current_stream_proc.wait(timeout=3)
+            current_streamlink.terminate()
+            current_streamlink.wait(timeout=3)
         except Exception:
             try:
-                current_stream_proc.kill()
+                current_streamlink.kill()
             except Exception:
                 pass
-        current_stream_proc = None
+        current_streamlink = None
 
 # ============================================================
 # STREAMING LOGIC
 # ============================================================
 
-def get_stream_cmd(url, cookie_file):
-    # محاولة استخدام yt-dlp أولاً لجلب 720p/1080p
-    if YTDLP:
-        cmd = [
-            YTDLP,
-            "-f", "bestvideo[height<=720]+bestaudio/best[height<=720]/best",
-            "-o", "-",
-            "--quiet",
-            "--no-warnings",
-        ]
-        if cookie_file:
-            cmd.extend(["--cookies", cookie_file])
-        cmd.append(url)
-        return cmd, "yt-dlp"
-
-    # في حال عدم وجود yt-dlp يتم الاعتماد على Streamlink
-    cmd = [
-        STREAMLINK,
-        "--stdout",
-        "--loglevel", "warning",
-        "--hls-live-edge", "3",
-        "--stream-segment-threads", "2",
-        "--stream-timeout", "60"
-    ]
-    if cookie_file:
-        cmd.extend(["--http-cookie", f"cookie-file={cookie_file}"])
-    cmd.extend([url, "720p,1080p,best,worst"])
-    return cmd, "streamlink"
-
 def stream_one_video(index, url, cookie_file):
-    global current_stream_proc
+    global current_streamlink
     if shutdown_requested:
         return False
 
@@ -208,28 +178,43 @@ def stream_one_video(index, url, cookie_file):
     log(f"[PLAYLIST] URL: {url}")
     log("=" * 60)
 
-    cmd, engine = get_stream_cmd(url, cookie_file)
-    log(f"[ENGINE] Fetching stream using {engine}...")
+    cmd = [
+        STREAMLINK,
+        "--stdout",
+        "--loglevel", "info",
+        "--youtube-player-client", "android,web",
+        "--hls-live-edge", "3",
+        "--stream-segment-threads", "2",
+        "--stream-timeout", "60",
+        "--retry-streams", "5",
+        "--retry-max", "10"
+    ]
+
+    if cookie_file:
+        cmd.extend(["--http-cookie", f"cookie-file={cookie_file}"])
+
+    # تحديد ترتيب الجودة من الأعلى للأقل (720p أو 1080p أولاً)
+    cmd.extend([url, "720p,1080p,720p60,1080p60,best"])
 
     try:
-        current_stream_proc = subprocess.Popen(
+        current_streamlink = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             bufsize=1024 * 1024
         )
     except Exception as e:
-        log(f"[ERROR] Failed to launch {engine}: {e}")
+        log(f"[ERROR] Failed to launch Streamlink: {e}")
         return False
 
     def read_stderr():
         try:
-            for line in iter(current_stream_proc.stderr.readline, b""):
+            for line in iter(current_streamlink.stderr.readline, b""):
                 if shutdown_requested:
                     break
                 msg = line.decode("utf-8", errors="ignore").strip()
                 if msg:
-                    log(f"[{engine.upper()}] {msg}")
+                    log(f"[STREAMLINK] {msg}")
         except Exception:
             pass
 
@@ -240,7 +225,7 @@ def stream_one_video(index, url, cookie_file):
 
     try:
         while not shutdown_requested:
-            chunk = current_stream_proc.stdout.read(64 * 1024)
+            chunk = current_streamlink.stdout.read(64 * 1024)
             if not chunk:
                 break
 
@@ -264,7 +249,7 @@ def stream_one_video(index, url, cookie_file):
         log(f"[ERROR] Data routing error: {e}")
         return False
     finally:
-        stop_stream_proc()
+        stop_streamlink()
 
     log(f"[PLAYLIST] Finished Video {index}. Proceeding to next...")
     return True
@@ -278,8 +263,8 @@ def main():
     log("   YouTube 24/7 Relay -> Restream -> TikTok")
     log("=" * 60)
 
-    if not FFMPEG:
-        log("[CRITICAL] Missing FFmpeg executable!")
+    if not STREAMLINK or not FFMPEG:
+        log("[CRITICAL] Missing dependencies! Ensure streamlink & ffmpeg are installed.")
         sys.exit(1)
 
     cookie_file = prepare_cookies()
@@ -304,7 +289,7 @@ def main():
 
         cycle += 1
 
-    stop_stream_proc()
+    stop_streamlink()
     stop_ffmpeg()
     log("[SYSTEM] Relay process terminated gracefully.")
 
