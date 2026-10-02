@@ -6,15 +6,10 @@ import subprocess
 
 
 # ============================================================
-# SOURCE
+# CONFIG
 # ============================================================
 
 YOUTUBE_URL = "https://youtu.be/pNd2amw7ZAo"
-
-
-# ============================================================
-# YOUTUBE OUTPUT
-# ============================================================
 
 YOUTUBE_STREAM_KEY = "e64m-e0kj-xbd4-24vm-c7rr"
 
@@ -22,11 +17,6 @@ YOUTUBE_RTMP = (
     "rtmp://a.rtmp.youtube.com/live2/"
     + YOUTUBE_STREAM_KEY
 )
-
-
-# ============================================================
-# FILES
-# ============================================================
 
 VIDEO_FILE = "/tmp/video.mp4"
 COOKIES_FILE = "/tmp/youtube_cookies.txt"
@@ -45,13 +35,15 @@ def log(message):
 # ============================================================
 
 def prepare_cookies():
+
     cookies_b64 = os.getenv("YOUTUBE_COOKIES_B64")
 
     if not cookies_b64:
-        log("[COOKIES] OFF - YOUTUBE_COOKIES_B64 is not set.")
+        log("[COOKIES] OFF")
         return None
 
     try:
+
         data = base64.b64decode(
             cookies_b64,
             validate=True
@@ -63,48 +55,83 @@ def prepare_cookies():
         size = len(data)
 
         log(
-            f"[COOKIES] File decoded successfully: "
-            f"{size} bytes"
+            f"[COOKIES] Decoded: {size} bytes"
         )
 
         with open(COOKIES_FILE, "rb") as f:
-            first_line = (
-                f.readline()
-                .decode("utf-8", errors="replace")
-                .strip()
+            lines = f.readlines()
+
+        # Count actual cookie lines
+        cookie_lines = []
+
+        for line in lines:
+
+            line = line.decode(
+                "utf-8",
+                errors="replace"
+            ).strip()
+
+            if (
+                line
+                and not line.startswith("#")
+            ):
+                cookie_lines.append(line)
+
+        log(
+            f"[COOKIES] Actual cookie entries: "
+            f"{len(cookie_lines)}"
+        )
+
+        if len(cookie_lines) == 0:
+
+            log(
+                "[COOKIES] WARNING: "
+                "No actual cookies found."
             )
 
-        if first_line not in (
-            "# HTTP Cookie File",
-            "# Netscape HTTP Cookie File",
-        ):
             log(
-                "[COOKIES] ERROR: "
-                "File is not Mozilla/Netscape cookies format."
-            )
-
-            log(
-                "[COOKIES] First line received: "
-                + first_line[:120]
+                "[COOKIES] Continuing WITHOUT cookies."
             )
 
             return None
 
-        log("[COOKIES] Format check: OK")
+        first_line = (
+            lines[0]
+            .decode(
+                "utf-8",
+                errors="replace"
+            )
+            .strip()
+        )
+
+        if first_line not in (
+            "# HTTP Cookie File",
+            "# Netscape HTTP Cookie File"
+        ):
+
+            log(
+                "[COOKIES] Invalid Netscape format."
+            )
+
+            return None
+
+        log(
+            "[COOKIES] Format: OK"
+        )
 
         return COOKIES_FILE
 
     except Exception as e:
+
         log(
-            "[COOKIES] ERROR: "
-            f"Cannot decode/check cookies: {e}"
+            f"[COOKIES] ERROR: {e}"
         )
 
         return None
 
 
 # ============================================================
-# RUNTIME CHECK
+# RUNTIME
 # ============================================================
 
 def check_runtime():
@@ -113,25 +140,23 @@ def check_runtime():
     log("[SYSTEM] Runtime check")
     log("============================================================")
 
-    # -------------------------
     # DENO
-    # -------------------------
-
     try:
 
-        deno = subprocess.run(
-            ["/usr/local/bin/deno", "--version"],
+        result = subprocess.run(
+            [
+                "/usr/local/bin/deno",
+                "--version"
+            ],
             capture_output=True,
             text=True
         )
 
-        output = (
-            deno.stdout.strip()
-            or deno.stderr.strip()
-        )
-
         log("[DENO]")
-        log(output)
+        log(
+            result.stdout.strip()
+            or result.stderr.strip()
+        )
 
     except Exception as e:
 
@@ -141,25 +166,24 @@ def check_runtime():
 
         return False
 
-    # -------------------------
     # YT-DLP
-    # -------------------------
-
     try:
 
-        ytdlp = subprocess.run(
-            ["yt-dlp", "--version"],
+        result = subprocess.run(
+            [
+                "yt-dlp",
+                "--version"
+            ],
             capture_output=True,
             text=True
         )
 
-        output = (
-            ytdlp.stdout.strip()
-            or ytdlp.stderr.strip()
-        )
-
         log(
-            f"[yt-dlp] {output}"
+            "[yt-dlp] "
+            + (
+                result.stdout.strip()
+                or result.stderr.strip()
+            )
         )
 
     except Exception as e:
@@ -170,27 +194,28 @@ def check_runtime():
 
         return False
 
-    # -------------------------
     # FFMPEG
-    # -------------------------
-
     try:
 
-        ffmpeg = subprocess.run(
-            ["ffmpeg", "-version"],
+        result = subprocess.run(
+            [
+                "ffmpeg",
+                "-version"
+            ],
             capture_output=True,
             text=True
         )
 
         first_line = (
-            ffmpeg.stdout.strip()
+            result.stdout.strip()
             .splitlines()[0]
-            if ffmpeg.stdout.strip()
-            else ffmpeg.stderr.strip()
+            if result.stdout.strip()
+            else result.stderr.strip()
         )
 
         log(
-            f"[FFmpeg] {first_line}"
+            "[FFmpeg] "
+            + first_line
         )
 
     except Exception as e:
@@ -205,21 +230,18 @@ def check_runtime():
 
 
 # ============================================================
-# TEST YOUTUBE ACCESS
+# BUILD YT-DLP COMMAND
 # ============================================================
 
-def test_youtube_access(cookies):
-
-    log("============================================================")
-    log("[SYSTEM] Testing YouTube access before download")
-    log("============================================================")
+def build_ytdlp_command(
+    cookies,
+    client_mode
+):
 
     command = [
         "yt-dlp",
 
         "--no-playlist",
-
-        "--simulate",
 
         "--no-warnings",
 
@@ -230,11 +252,76 @@ def test_youtube_access(cookies):
         "ejs:npm",
 
         "--no-check-certificates",
+
+        "--retries",
+        "5",
+
+        "--extractor-retries",
+        "5",
+
+        "--socket-timeout",
+        "60"
     ]
 
-    # -------------------------
+    # --------------------------------------------------------
+    # CLIENT
+    # --------------------------------------------------------
+
+    if client_mode == "default":
+
+        log(
+            "[CLIENT] default"
+        )
+
+    elif client_mode == "web_safari":
+
+        command.extend([
+            "--extractor-args",
+            "youtube:player_client=default,web_safari",
+            "--extractor-args",
+            "youtube:webpage_client=web_safari"
+        ])
+
+        log(
+            "[CLIENT] default + web_safari"
+        )
+
+    elif client_mode == "android_vr":
+
+        command.extend([
+            "--extractor-args",
+            "youtube:player_client=android_vr"
+        ])
+
+        log(
+            "[CLIENT] android_vr"
+        )
+
+    elif client_mode == "tv":
+
+        command.extend([
+            "--extractor-args",
+            "youtube:player_client=tv"
+        ])
+
+        log(
+            "[CLIENT] tv"
+        )
+
+    elif client_mode == "web_embedded":
+
+        command.extend([
+            "--extractor-args",
+            "youtube:player_client=web_embedded"
+        ])
+
+        log(
+            "[CLIENT] web_embedded"
+        )
+
+    # --------------------------------------------------------
     # COOKIES
-    # -------------------------
+    # --------------------------------------------------------
 
     if cookies:
 
@@ -244,116 +331,138 @@ def test_youtube_access(cookies):
         ])
 
         log(
-            "[TEST] Cookies: ON"
+            "[COOKIES] ON"
         )
 
     else:
 
         log(
-            "[TEST] Cookies: OFF"
-        )
-
-    # -------------------------
-    # OPTIONAL USER AGENT
-    # -------------------------
-
-    user_agent = os.getenv(
-        "YOUTUBE_USER_AGENT",
-        ""
-    ).strip()
-
-    if user_agent:
-
-        command.extend([
-            "--user-agent",
-            user_agent
-        ])
-
-        log(
-            "[TEST] Custom browser User-Agent: ON"
-        )
-
-    else:
-
-        log(
-            "[TEST] Custom browser User-Agent: OFF"
+            "[COOKIES] OFF"
         )
 
     command.append(
         YOUTUBE_URL
     )
 
-    result = subprocess.run(
-        command,
-        capture_output=True,
-        text=True
-    )
+    return command
 
-    combined = (
-        result.stdout
-        + "\n"
-        + result.stderr
-    ).strip()
 
-    if result.returncode == 0:
+# ============================================================
+# TEST YOUTUBE
+# ============================================================
 
+def test_youtube_access(cookies):
+
+    log("============================================================")
+    log("[SYSTEM] Testing YouTube access")
+    log("============================================================")
+
+    # --------------------------------------------------------
+    # IMPORTANT:
+    #
+    # Try several clients automatically.
+    #
+    # Some YouTube clients currently have different
+    # PO-token / SABR / bot-check requirements.
+    # --------------------------------------------------------
+
+    clients = [
+        "default",
+        "web_safari",
+        "android_vr",
+        "tv",
+        "web_embedded"
+    ]
+
+    for client in clients:
+
+        log("")
         log(
-            "[TEST] YouTube extraction test: PASS"
+            "------------------------------------------------------------"
         )
 
-        return True
+        log(
+            f"[TEST] Trying client: {client}"
+        )
 
+        log(
+            "------------------------------------------------------------"
+        )
+
+        command = build_ytdlp_command(
+            cookies,
+            client
+        )
+
+        command.insert(
+            2,
+            "--simulate"
+        )
+
+        result = subprocess.run(
+            command,
+            capture_output=True,
+            text=True
+        )
+
+        combined = (
+            result.stdout
+            + "\n"
+            + result.stderr
+        ).strip()
+
+        if result.returncode == 0:
+
+            log(
+                f"[SUCCESS] YouTube client works: {client}"
+            )
+
+            return client
+
+        log(
+            f"[FAILED] Client {client}"
+        )
+
+        # Show useful error only
+        log(
+            combined[-2500:]
+        )
+
+        time.sleep(2)
+
+    log("")
     log(
-        "[TEST] YouTube extraction test: FAILED"
+        "============================================================"
     )
 
     log(
-        combined[-6000:]
+        "[FATAL] All YouTube clients failed."
     )
 
-    if (
-        "Sign in to confirm you're not a bot"
-        in combined
-    ):
+    log(
+        "[FATAL] YouTube is currently blocking "
+        "this Railway request."
+    )
 
-        if cookies:
+    log(
+        "============================================================"
+    )
 
-            log(
-                "[TEST] YouTube rejected the request "
-                "with the supplied cookies."
-            )
-
-            log(
-                "[TEST] Possible causes:"
-            )
-
-            log(
-                "[TEST] - Expired cookies"
-            )
-
-            log(
-                "[TEST] - Invalid browser session"
-            )
-
-            log(
-                "[TEST] - Railway IP challenge"
-            )
-
-        else:
-
-            log(
-                "[TEST] YouTube is challenging "
-                "the Railway request."
-            )
-
-    return False
+    return None
 
 
 # ============================================================
-# DOWNLOAD VIDEO
+# DOWNLOAD
 # ============================================================
 
-def download_video(cookies):
+def download_video(
+    cookies,
+    working_client
+):
+
+    # --------------------------------------------------------
+    # Existing video
+    # --------------------------------------------------------
 
     if os.path.exists(VIDEO_FILE):
 
@@ -370,8 +479,8 @@ def download_video(cookies):
                 )
 
                 log(
-                    f"[SYSTEM] Size: "
-                    f"{size / (1024 * 1024):.2f} MB"
+                    f"[SYSTEM] "
+                    f"{size / 1024 / 1024:.2f} MB"
                 )
 
                 return True
@@ -379,14 +488,11 @@ def download_video(cookies):
         except Exception:
             pass
 
-    # -------------------------
-    # REMOVE OLD FILE
-    # -------------------------
+    # Remove old file
 
     try:
 
         if os.path.exists(VIDEO_FILE):
-
             os.remove(VIDEO_FILE)
 
     except Exception:
@@ -400,15 +506,9 @@ def download_video(cookies):
         f"[SOURCE] {YOUTUBE_URL}"
     )
 
-    # ========================================================
-    # QUALITY
-    #
-    # Prefer:
-    # 1080p
-    # 60 FPS
-    # H.264
-    # M4A audio
-    # ========================================================
+    # --------------------------------------------------------
+    # Prefer H264 <=1080p <=60fps
+    # --------------------------------------------------------
 
     format_selector = (
         "bestvideo[height<=1080][fps<=60][vcodec^=avc1]+"
@@ -416,7 +516,7 @@ def download_video(cookies):
 
         "best[height<=1080][fps<=60][vcodec^=avc1]/"
 
-        "bestvideo[height<=1080][fps<=60][vcodec^=avc1]+"
+        "bestvideo[height<=1080][fps<=60]+"
         "bestaudio/"
 
         "best[height<=1080][fps<=60]/"
@@ -446,6 +546,9 @@ def download_video(cookies):
         "--fragment-retries",
         "10",
 
+        "--extractor-retries",
+        "10",
+
         "--socket-timeout",
         "60",
 
@@ -457,11 +560,48 @@ def download_video(cookies):
 
         "--remote-components",
         "ejs:npm",
+
+        "--no-check-certificates"
     ]
 
-    # -------------------------
-    # COOKIES
-    # -------------------------
+    # --------------------------------------------------------
+    # Same client that passed the test
+    # --------------------------------------------------------
+
+    if working_client == "web_safari":
+
+        command.extend([
+            "--extractor-args",
+            "youtube:player_client=default,web_safari",
+
+            "--extractor-args",
+            "youtube:webpage_client=web_safari"
+        ])
+
+    elif working_client == "android_vr":
+
+        command.extend([
+            "--extractor-args",
+            "youtube:player_client=android_vr"
+        ])
+
+    elif working_client == "tv":
+
+        command.extend([
+            "--extractor-args",
+            "youtube:player_client=tv"
+        ])
+
+    elif working_client == "web_embedded":
+
+        command.extend([
+            "--extractor-args",
+            "youtube:player_client=web_embedded"
+        ])
+
+    # --------------------------------------------------------
+    # Cookies
+    # --------------------------------------------------------
 
     if cookies:
 
@@ -470,32 +610,20 @@ def download_video(cookies):
             cookies
         ])
 
-    # -------------------------
-    # USER AGENT
-    # -------------------------
-
-    user_agent = os.getenv(
-        "YOUTUBE_USER_AGENT",
-        ""
-    ).strip()
-
-    if user_agent:
-
-        command.extend([
-            "--user-agent",
-            user_agent
-        ])
-
     command.append(
         YOUTUBE_URL
     )
 
     log(
-        "[SYSTEM] Selecting best compatible quality..."
+        "[SYSTEM] Target:"
     )
 
     log(
-        "[SYSTEM] Target: up to 1080p / 60 FPS / H.264"
+        "1080p / 60 FPS / H.264 when available"
+    )
+
+    log(
+        f"[SYSTEM] Using client: {working_client}"
     )
 
     result = subprocess.run(
@@ -510,10 +638,12 @@ def download_video(cookies):
 
         return False
 
-    if not os.path.exists(VIDEO_FILE):
+    if not os.path.exists(
+        VIDEO_FILE
+    ):
 
         log(
-            "[ERROR] Video file was not created."
+            "[ERROR] Video file not created."
         )
 
         return False
@@ -525,21 +655,25 @@ def download_video(cookies):
     if size < 10 * 1024 * 1024:
 
         log(
-            "[ERROR] Downloaded file is too small."
+            "[ERROR] Video file too small."
         )
 
         return False
 
     log(
-        "[SYSTEM] Download completed: "
-        f"{size / (1024 * 1024):.2f} MB"
+        "[SUCCESS] Download completed."
+    )
+
+    log(
+        f"[SIZE] "
+        f"{size / 1024 / 1024:.2f} MB"
     )
 
     return True
 
 
 # ============================================================
-# SHOW VIDEO INFO
+# VIDEO INFO
 # ============================================================
 
 def show_video_info():
@@ -574,12 +708,10 @@ def show_video_info():
             text=True
         )
 
-        output = (
+        log(
             result.stdout.strip()
             or result.stderr.strip()
         )
-
-        log(output)
 
     except Exception as e:
 
@@ -589,37 +721,20 @@ def show_video_info():
 
 
 # ============================================================
-# START YOUTUBE STREAM
+# START STREAM
 # ============================================================
 
 def start_stream():
 
     log("============================================================")
-    log("[SYSTEM] Starting 24/7 YouTube stream")
+    log("[SYSTEM] Starting YouTube LIVE")
     log("============================================================")
 
-    log(
-        "[VIDEO] COPY / NO VIDEO ENCODE"
-    )
-
-    log(
-        "[AUDIO] AAC 128k / 44100Hz / Stereo"
-    )
-
-    log(
-        "[LOOP] Infinite"
-    )
-
-    log(
-        "[OUTPUT] YouTube RTMP"
-    )
-
-    # ========================================================
-    # FFMPEG
-    # ========================================================
+    log("[VIDEO] COPY")
+    log("[AUDIO] AAC 128k / 44.1kHz / Stereo")
+    log("[LOOP] 24/7")
 
     command = [
-
         "ffmpeg",
 
         "-hide_banner",
@@ -627,10 +742,10 @@ def start_stream():
         "-loglevel",
         "warning",
 
-        # Real-time playback
+        # Real time
         "-re",
 
-        # Repeat forever
+        # Infinite loop
         "-stream_loop",
         "-1",
 
@@ -638,20 +753,14 @@ def start_stream():
         "-i",
         VIDEO_FILE,
 
-        # -------------------------
-        # VIDEO
-        # -------------------------
-
+        # Video
         "-map",
         "0:v:0",
 
         "-c:v",
         "copy",
 
-        # -------------------------
-        # AUDIO
-        # -------------------------
-
+        # Audio
         "-map",
         "0:a:0?",
 
@@ -667,20 +776,14 @@ def start_stream():
         "-ac",
         "2",
 
-        # -------------------------
-        # TIMESTAMP
-        # -------------------------
-
+        # Timestamp
         "-fflags",
         "+genpts",
 
         "-avoid_negative_ts",
         "make_zero",
 
-        # -------------------------
-        # OUTPUT
-        # -------------------------
-
+        # RTMP
         "-f",
         "flv",
 
@@ -704,8 +807,11 @@ def start_stream():
             return_code = process.wait()
 
             log(
-                "[SYSTEM] FFmpeg stopped. "
-                f"Exit code: {return_code}"
+                "[SYSTEM] FFmpeg stopped."
+            )
+
+            log(
+                f"[SYSTEM] Exit code: {return_code}"
             )
 
         except KeyboardInterrupt:
@@ -726,7 +832,7 @@ def start_stream():
         except Exception as e:
 
             log(
-                f"[ERROR] FFmpeg error: {e}"
+                f"[ERROR] FFmpeg: {e}"
             )
 
         log(
@@ -745,6 +851,7 @@ def main():
     log("")
     log("============================================================")
     log(" YouTube Video -> YouTube LIVE 24/7")
+    log(" Multi-client YouTube fallback")
     log(" Deno + yt-dlp + FFmpeg")
     log("============================================================")
 
@@ -770,9 +877,7 @@ def main():
 
     log("============================================================")
 
-    # ========================================================
-    # RUNTIME
-    # ========================================================
+    # Runtime
 
     if not check_runtime():
 
@@ -782,71 +887,53 @@ def main():
 
         sys.exit(1)
 
-    # ========================================================
-    # COOKIES
-    # ========================================================
+    # Cookies
 
     cookies = prepare_cookies()
 
-    if (
-        os.getenv("YOUTUBE_COOKIES_B64")
-        and not cookies
-    ):
+    # Test
 
-        log(
-            "[FATAL] YOUTUBE_COOKIES_B64 exists "
-            "but the cookie file failed validation."
-        )
-
-        sys.exit(1)
-
-    # ========================================================
-    # TEST YOUTUBE
-    # ========================================================
-
-    if not test_youtube_access(
+    working_client = test_youtube_access(
         cookies
-    ):
+    )
 
+    if not working_client:
+
+        log("")
         log(
-            "[FATAL] YouTube access test failed."
+            "[FATAL] No YouTube client could access the video."
         )
 
         log(
-            "[FATAL] Download will NOT start."
+            "[FATAL] Nothing was downloaded."
         )
 
         sys.exit(1)
 
-    # ========================================================
-    # DOWNLOAD
-    # ========================================================
+    # Download
 
     if not download_video(
-        cookies
+        cookies,
+        working_client
     ):
 
         log(
-            "[FATAL] Could not download YouTube video."
+            "[FATAL] Could not download video."
         )
 
         sys.exit(1)
 
-    # ========================================================
-    # VIDEO INFO
-    # ========================================================
+    # Info
 
     show_video_info()
 
-    # ========================================================
-    # STREAM
-    # ========================================================
+    # Stream
 
     start_stream()
 
 
 # ============================================================
-# RUN
+# START
 # ============================================================
 
 if __name__ == "__main__":
