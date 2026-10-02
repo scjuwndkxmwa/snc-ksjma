@@ -86,6 +86,7 @@ def find_executable(name):
     return None
 
 STREAMLINK = find_executable("streamlink")
+YTDLP = find_executable("yt-dlp")
 FFMPEG = find_executable("ffmpeg")
 
 # ============================================================
@@ -185,14 +186,17 @@ def stream_one_video(index, url, cookie_file):
         "--hls-live-edge", "3",
         "--stream-segment-threads", "2",
         "--stream-timeout", "60",
-        "--retry-streams", "5",
-        "--retry-max", "10"
+        "--retry-streams", "3",
+        "--retry-max", "5"
     ]
 
+    # الإصلاح المهم: خيار الكوكيز الصحيح لـ Streamlink
     if cookie_file:
-        cmd.extend(["--http-cookie", f"cookie-file={cookie_file}"])
+        cmd.extend(["--http-cookies-file", cookie_file])
 
-    # اختيارات الجودة الصحيحة بدون خيارات غير مدعومة
+    # تمويه الطلب لتفادي حظر البوتات
+    cmd.extend(["--http-header", "User-Agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"])
+
     cmd.extend([url, "best,1080p,720p,worst"])
 
     try:
