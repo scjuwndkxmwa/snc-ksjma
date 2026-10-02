@@ -28,7 +28,7 @@ VIDEOS = [
 TARGET_WIDTH = 1280
 TARGET_HEIGHT = 720
 TARGET_FPS = 30
-VIDEO_BITRATE = "3500k"
+VIDEO_BITRATE = "3000k"
 AUDIO_BITRATE = "128k"
 
 COOKIES_B64 = os.getenv("YOUTUBE_COOKIES_B64", "").strip()
@@ -113,7 +113,7 @@ def start_ffmpeg():
         "-tune", "zerolatency",
         "-b:v", VIDEO_BITRATE,
         "-maxrate", VIDEO_BITRATE,
-        "-bufsize", "7000k",
+        "-bufsize", "6000k",
         "-g", str(TARGET_FPS * 2),
         "-c:a", "aac",
         "-b:a", AUDIO_BITRATE,
@@ -182,7 +182,6 @@ def stream_one_video(index, url, cookie_file):
         STREAMLINK,
         "--stdout",
         "--loglevel", "info",
-        "--youtube-player-client", "android,web",
         "--hls-live-edge", "3",
         "--stream-segment-threads", "2",
         "--stream-timeout", "60",
@@ -193,8 +192,8 @@ def stream_one_video(index, url, cookie_file):
     if cookie_file:
         cmd.extend(["--http-cookie", f"cookie-file={cookie_file}"])
 
-    # تحديد ترتيب الجودة من الأعلى للأقل (720p أو 1080p أولاً)
-    cmd.extend([url, "720p,1080p,720p60,1080p60,best"])
+    # اختيارات الجودة الصحيحة بدون خيارات غير مدعومة
+    cmd.extend([url, "best,1080p,720p,worst"])
 
     try:
         current_streamlink = subprocess.Popen(
