@@ -1,2 +1,2 @@
 streamlink==8.6.1
-yt-dlp
+yt-dlp --upgrade
