@@ -1,244 +1,345 @@
 import os
 import sys
 import time
-import signal
-import subprocess
 import base64
-import shutil
+import subprocess
+from pathlib import Path
 
 # ============================================================
-# SETTINGS & CONFIGURATION
+
+# SETTINGS
+
 # ============================================================
+
+YOUTUBE_URL = "https://youtu.be/c3YZbShLyBM"
+
+# Restream Stream Key
 
 RESTREAM_STREAM_KEY = "re_12012590_event333a4548cabc4367b4154e3ccbd1a7f9"
-RESTREAM_URL = f"rtmp://live.restream.io/live/{RESTREAM_STREAM_KEY}"
 
-VIDEOS = [
-    "https://youtu.be/pNd2amw7ZAo",
-    "https://youtu.be/tFA3mH8kTJ0",
-    "https://youtu.be/UWzGxlZWimE",
-    "https://youtu.be/iCnj6QwmtwA",
-    "https://youtu.be/03cpj3iwNnY",
-    "https://youtu.be/RHnm5zuprrk",
-    "https://youtu.be/UfiLhGZ9J-A",
-    "https://youtu.be/6Pc97lWbxN8",
-]
+RESTREAM_RTMP = (
+"rtmp://live.restream.io/live/"
++ RESTREAM_STREAM_KEY
+)
 
-TARGET_WIDTH = 1280
-TARGET_HEIGHT = 720
-TARGET_FPS = 30
-VIDEO_BITRATE = "3000k"
-AUDIO_BITRATE = "128k"
-
-COOKIES_B64 = os.getenv("YOUTUBE_COOKIES_B64", "").strip()
-COOKIE_FILE = "/tmp/youtube_cookies.txt"
-RECONNECT_DELAY = 10
-
-ffmpeg_process = None
-shutdown_requested = False
+VIDEO_FILE = "/tmp/video.mp4"
+COOKIES_FILE = "/tmp/youtube_cookies.txt"
 
 # ============================================================
-# LOGGING & SIGNALS
+
+# PRINT
+
 # ============================================================
 
 def log(message):
-    print(message, flush=True)
-
-def shutdown_handler(signum, frame):
-    global shutdown_requested
-    if shutdown_requested:
-        return
-    shutdown_requested = True
-    log("\n[SYSTEM] Shutdown initiated...")
-    stop_ffmpeg()
-
-signal.signal(signal.SIGTERM, shutdown_handler)
-signal.signal(signal.SIGINT, shutdown_handler)
+print(message, flush=True)
 
 # ============================================================
-# UTILITIES
+
+# YOUTUBE COOKIES
+
 # ============================================================
 
 def prepare_cookies():
-    if not COOKIES_B64:
-        log("[SYSTEM] YouTube Cookies: OFF")
-        return None
-    try:
-        cookie_data = base64.b64decode(COOKIES_B64)
-        with open(COOKIE_FILE, "wb") as f:
-            f.write(cookie_data)
-        log("[SYSTEM] YouTube Cookies: Loaded successfully.")
-        return COOKIE_FILE
-    except Exception as e:
-        log(f"[ERROR] Failed to write cookies: {e}")
-        return None
+cookies_b64 = os.getenv("YOUTUBE_COOKIES_B64")
 
-def find_executable(name):
-    path = shutil.which(name)
-    if path:
-        return path
-    for p in [f"/usr/local/bin/{name}", f"/usr/bin/{name}", f"/opt/venv/bin/{name}"]:
-        if os.path.exists(p):
-            return p
+```
+if not cookies_b64:
+    log("[SYSTEM] YouTube cookies: OFF")
     return None
 
-YTDLP = find_executable("yt-dlp")
-FFMPEG = find_executable("ffmpeg")
+try:
+    data = base64.b64decode(cookies_b64)
 
-# ============================================================
-# DIRECT STREAM EXTRACTION (Android API Client Bypass)
-# ============================================================
+    with open(COOKIES_FILE, "wb") as f:
+        f.write(data)
 
-def get_direct_stream_url(youtube_url, cookie_file):
-    if not YTDLP:
-        log("[CRITICAL] yt-dlp executable not found!")
-        return None
+    log("[SYSTEM] YouTube cookies: ON")
+    return COOKIES_FILE
 
-    log("[ENGINE] Extracting stream via Android Client API...")
-    cmd = [
-        YTDLP,
-        "-g",
-        "-f", "best[height<=720]/bestvideo[height<=720]+bestaudio/best",
-        "--extractor-args", "youtube:player_client=android,ios",
-        "--no-warnings",
-        "--no-playlist"
-    ]
-
-    if cookie_file:
-        cmd.extend(["--cookies", cookie_file])
-
-    cmd.append(youtube_url)
-
-    try:
-        res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=30)
-        if res.returncode == 0 and res.stdout.strip():
-            urls = res.stdout.strip().split("\n")
-            log("[ENGINE] Direct stream URL fetched successfully.")
-            return urls[0]
-        else:
-            log(f"[ERROR] yt-dlp extraction failed: {res.stderr.strip()}")
-    except Exception as e:
-        log(f"[ERROR] Exception during yt-dlp extraction: {e}")
-
+except Exception as e:
+    log(f"[WARN] Failed to prepare cookies: {e}")
     return None
+```
 
 # ============================================================
-# FFMPEG STREAMING PIPELINE
+
+# DOWNLOAD VIDEO
+
 # ============================================================
 
-def stream_video_with_ffmpeg(direct_url, index):
-    global ffmpeg_process
-    if shutdown_requested:
-        return False
+def download_video():
 
-    log(f"[SYSTEM] Starting FFmpeg broadcast for Video #{index}...")
+```
+if os.path.exists(VIDEO_FILE):
+    try:
+        if os.path.getsize(VIDEO_FILE) > 10 * 1024 * 1024:
+            log("[SYSTEM] Existing video found.")
+            return True
+    except Exception:
+        pass
 
-    command = [
-        FFMPEG,
-        "-loglevel", "warning",
-        "-re",
-        "-i", direct_url,
-        "-vf", f"scale={TARGET_WIDTH}:{TARGET_HEIGHT}:force_original_aspect_ratio=decrease,pad={TARGET_WIDTH}:{TARGET_HEIGHT}:(ow-iw)/2:(oh-ih)/2,fps={TARGET_FPS}",
-        "-c:v", "libx264",
-        "-preset", "ultrafast",
-        "-tune", "zerolatency",
-        "-b:v", VIDEO_BITRATE,
-        "-maxrate", VIDEO_BITRATE,
-        "-bufsize", "6000k",
-        "-g", str(TARGET_FPS * 2),
-        "-c:a", "aac",
-        "-b:a", AUDIO_BITRATE,
-        "-ar", "44100",
-        "-ac", "2",
-        "-f", "flv",
-        RESTREAM_URL
-    ]
+if os.path.exists(VIDEO_FILE):
+    try:
+        os.remove(VIDEO_FILE)
+    except Exception:
+        pass
+
+log("")
+log("============================================================")
+log("[SYSTEM] Downloading YouTube video")
+log("============================================================")
+log(f"[SOURCE] {YOUTUBE_URL}")
+log("")
+
+cookies = prepare_cookies()
+
+# Prefer:
+# 1. H.264 / AVC video
+# 2. Up to 1080p
+# 3. Up to 60 FPS
+# 4. Best available audio
+#
+# Fallbacks are included if the preferred format isn't available.
+
+format_selector = (
+    "bestvideo[height<=1080][fps<=60][vcodec^=avc1]+"
+    "bestaudio[ext=m4a]/"
+    "best[height<=1080][fps<=60][vcodec^=avc1]/"
+    "bestvideo[height<=1080][fps<=60][vcodec^=avc1]+"
+    "bestaudio/"
+    "best[height<=1080][fps<=60]/"
+    "best"
+)
+
+command = [
+    "yt-dlp",
+    "--no-playlist",
+    "--format",
+    format_selector,
+
+    # Merge into MP4 without re-encoding the video.
+    "--merge-output-format",
+    "mp4",
+
+    "--output",
+    VIDEO_FILE,
+
+    "--no-part",
+    "--no-overwrites",
+
+    "--retries",
+    "10",
+
+    "--fragment-retries",
+    "10",
+
+    "--socket-timeout",
+    "60",
+
+    "--concurrent-fragments",
+    "4",
+
+    YOUTUBE_URL,
+]
+
+if cookies:
+    command.insert(-1, "--cookies")
+    command.insert(-1, cookies)
+
+log("[SYSTEM] Selecting best compatible quality...")
+log("[SYSTEM] Target: H.264 / up to 1080p / up to 60 FPS")
+log("")
+
+result = subprocess.run(command)
+
+if result.returncode != 0:
+    log("")
+    log("[ERROR] yt-dlp failed.")
+    return False
+
+if not os.path.exists(VIDEO_FILE):
+    log("[ERROR] Video file was not created.")
+    return False
+
+size = os.path.getsize(VIDEO_FILE)
+
+if size < 10 * 1024 * 1024:
+    log("[ERROR] Downloaded file is too small.")
+    return False
+
+log("")
+log("[SYSTEM] Download completed successfully.")
+log(f"[SYSTEM] File size: {size / (1024 * 1024):.2f} MB")
+
+return True
+```
+
+# ============================================================
+
+# CHECK VIDEO INFORMATION
+
+# ============================================================
+
+def show_video_info():
+
+```
+log("")
+log("============================================================")
+log("[SYSTEM] Checking downloaded video")
+log("============================================================")
+
+command = [
+    "ffprobe",
+    "-v",
+    "error",
+    "-select_streams",
+    "v:0",
+    "-show_entries",
+    "stream=codec_name,width,height,r_frame_rate",
+    "-of",
+    "default=noprint_wrappers=1",
+    VIDEO_FILE,
+]
+
+try:
+    result = subprocess.run(
+        command,
+        capture_output=True,
+        text=True
+    )
+
+    if result.stdout.strip():
+        log(result.stdout.strip())
+
+except Exception as e:
+    log(f"[WARN] ffprobe failed: {e}")
+```
+
+# ============================================================
+
+# START STREAM
+
+# ============================================================
+
+def start_stream():
+
+```
+log("")
+log("============================================================")
+log("[SYSTEM] Starting 24/7 relay")
+log("============================================================")
+log("[SOURCE] YouTube")
+log("[DESTINATION] Restream")
+log("[VIDEO] COPY - NO VIDEO ENCODING")
+log("[AUDIO] AAC 128k / 44100 Hz / Stereo")
+log("[LOOP] INFINITE")
+log("============================================================")
+log("")
+
+command = [
+    "ffmpeg",
+
+    # Read file at real-time speed.
+    "-re",
+
+    # Repeat the MP4 forever.
+    "-stream_loop",
+    "-1",
+
+    "-i",
+    VIDEO_FILE,
+
+    # Video: copy exactly as downloaded.
+    "-map",
+    "0:v:0",
+    "-c:v",
+    "copy",
+
+    # Audio: AAC for RTMP/Restream compatibility.
+    "-map",
+    "0:a:0?",
+    "-c:a",
+    "aac",
+    "-b:a",
+    "128k",
+    "-ar",
+    "44100",
+    "-ac",
+    "2",
+
+    # Timestamp handling.
+    "-fflags",
+    "+genpts",
+
+    "-avoid_negative_ts",
+    "make_zero",
+
+    # FLV / RTMP output.
+    "-flvflags",
+    "no_duration_filesize",
+
+    "-f",
+    "flv",
+
+    RESTREAM_RTMP,
+]
+
+while True:
 
     try:
-        ffmpeg_process = subprocess.Popen(
-            command,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            bufsize=1
-        )
 
-        last_log_time = time.time()
-        while not shutdown_requested:
-            if ffmpeg_process.poll() is not None:
-                break
-            
-            line = ffmpeg_process.stdout.readline()
-            if not line and ffmpeg_process.poll() is not None:
-                break
+        log("[SYSTEM] Connecting to Restream...")
 
-            if time.time() - last_log_time > 30:
-                log(f"[BROADCASTING] Video #{index} active and streaming to Restream...")
-                last_log_time = time.time()
+        process = subprocess.Popen(command)
 
-        ffmpeg_process.wait()
-        log(f"[PLAYLIST] Finished Video #{index}. Proceeding to next...")
-        return True
-    except Exception as e:
-        log(f"[ERROR] FFmpeg process crashed: {e}")
-        return False
-    finally:
-        stop_ffmpeg()
+        return_code = process.wait()
 
-def stop_ffmpeg():
-    global ffmpeg_process
-    if ffmpeg_process:
+        log("")
+        log(f"[SYSTEM] FFmpeg stopped. Exit code: {return_code}")
+
+    except KeyboardInterrupt:
+
+        log("[SYSTEM] Stopping...")
         try:
-            ffmpeg_process.terminate()
-            ffmpeg_process.wait(timeout=3)
+            process.terminate()
         except Exception:
-            try:
-                ffmpeg_process.kill()
-            except Exception:
-                pass
-        ffmpeg_process = None
+            pass
+        sys.exit(0)
+
+    except Exception as e:
+
+        log(f"[ERROR] FFmpeg error: {e}")
+
+    log("[SYSTEM] Reconnecting in 10 seconds...")
+    time.sleep(10)
+```
 
 # ============================================================
-# MAIN LOOP
+
+# MAIN
+
 # ============================================================
 
 def main():
-    log("=" * 60)
-    log("   YouTube 24/7 Relay -> Restream -> TikTok")
-    log("=" * 60)
 
-    if not FFMPEG or not YTDLP:
-        log("[CRITICAL] Missing dependencies! Ensure yt-dlp & ffmpeg are installed.")
-        sys.exit(1)
+```
+log("")
+log("============================================================")
+log(" YouTube -> Restream 24/7")
+log("============================================================")
+log("[SYSTEM] Single video infinite loop")
+log("[SYSTEM] Maximum compatible quality")
+log("============================================================")
 
-    cookie_file = prepare_cookies()
-    cycle = 1
+if not download_video():
+    log("[FATAL] Could not download the YouTube video.")
+    sys.exit(1)
 
-    while not shutdown_requested:
-        log(f"\n[SYSTEM] STARTING PLAYLIST CYCLE #{cycle}")
+show_video_info()
 
-        for idx, video_url in enumerate(VIDEOS, start=1):
-            if shutdown_requested:
-                break
+start_stream()
+```
 
-            log("\n" + "=" * 60)
-            log(f"[PLAYLIST] Playing Video {idx}/{len(VIDEOS)}")
-            log(f"[PLAYLIST] URL: {video_url}")
-            log("=" * 60)
-
-            direct_url = get_direct_stream_url(video_url, cookie_file)
-
-            if direct_url:
-                stream_video_with_ffmpeg(direct_url, idx)
-            else:
-                log(f"[WARNING] Skipping Video #{idx} due to URL extraction failure. Waiting {RECONNECT_DELAY}s...")
-                time.sleep(RECONNECT_DELAY)
-
-            time.sleep(2)
-
-        cycle += 1
-
-    log("[SYSTEM] Relay process terminated gracefully.")
-
-if __name__ == "__main__":
-    main()
+if **name** == "**main**":
+main()
