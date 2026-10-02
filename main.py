@@ -33,7 +33,7 @@ AUDIO_BITRATE = "128k"
 
 COOKIES_B64 = os.getenv("YOUTUBE_COOKIES_B64", "").strip()
 COOKIE_FILE = "/tmp/youtube_cookies.txt"
-RECONNECT_DELAY = 5
+RECONNECT_DELAY = 15  # مهلة 15 ثانية لتفادي الـ 429 Rate Limit
 
 ffmpeg_process = None
 current_streamlink = None
@@ -86,7 +86,6 @@ def find_executable(name):
     return None
 
 STREAMLINK = find_executable("streamlink")
-YTDLP = find_executable("yt-dlp")
 FFMPEG = find_executable("ffmpeg")
 
 # ============================================================
@@ -184,18 +183,20 @@ def stream_one_video(index, url, cookie_file):
         "--stdout",
         "--loglevel", "info",
         "--hls-live-edge", "3",
-        "--stream-segment-threads", "2",
-        "--stream-timeout", "60",
-        "--retry-streams", "3",
-        "--retry-max", "5"
+        "--stream-segment-threads", "1",  # تقليل Threads لتجنب حظر Rate Limit
+        "--stream-timeout", "30",
+        "--retry-streams", "5",
+        "--retry-max", "3"
     ]
 
-    # الإصلاح المهم: خيار الكوكيز الصحيح لـ Streamlink
     if cookie_file:
         cmd.extend(["--http-cookies-file", cookie_file])
 
-    # تمويه الطلب لتفادي حظر البوتات
-    cmd.extend(["--http-header", "User-Agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"])
+    # تمويه الطلب للحد من اكتشاف البوتات
+    cmd.extend([
+        "--http-header", 
+        "User-Agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    ])
 
     cmd.extend([url, "best,1080p,720p,worst"])
 
@@ -275,7 +276,7 @@ def main():
 
     while not shutdown_requested:
         log(f"\n[SYSTEM] STARTING PLAYLIST CYCLE #{cycle}")
-        
+
         if not ffmpeg_process or ffmpeg_process.poll() is not None:
             if not start_ffmpeg():
                 time.sleep(RECONNECT_DELAY)
@@ -287,8 +288,11 @@ def main():
 
             success = stream_one_video(idx, video_url, cookie_file)
             if not success and not shutdown_requested:
-                log(f"[WARNING] Problem streaming video {idx}. Retrying in {RECONNECT_DELAY}s...")
-                time.sleep(RECONNECT_DELAY)
+                log(f"[WARNING] Problem or Rate Limit on video {idx}. Waiting {RECONNECT_DELAY}s before retrying...")
+                time.sleep(RECONNECT_DELAY)  # الانتظار بدلاً من التكرار الفوري لتفادي 429
+
+            # فترة انتظار بسيطة بين فيديو وآخر لتجنب الضغط المتتالي على يوتيوب
+            time.sleep(3)
 
         cycle += 1
 
