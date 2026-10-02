@@ -5,7 +5,6 @@ import signal
 import subprocess
 import base64
 import shutil
-import threading
 
 # ============================================================
 # SETTINGS & CONFIGURATION
@@ -33,10 +32,9 @@ AUDIO_BITRATE = "128k"
 
 COOKIES_B64 = os.getenv("YOUTUBE_COOKIES_B64", "").strip()
 COOKIE_FILE = "/tmp/youtube_cookies.txt"
-RECONNECT_DELAY = 15  # مهلة 15 ثانية لتفادي الـ 429 Rate Limit
+RECONNECT_DELAY = 10
 
 ffmpeg_process = None
-current_streamlink = None
 shutdown_requested = False
 
 # ============================================================
@@ -52,7 +50,6 @@ def shutdown_handler(signum, frame):
         return
     shutdown_requested = True
     log("\n[SYSTEM] Shutdown initiated...")
-    stop_streamlink()
     stop_ffmpeg()
 
 signal.signal(signal.SIGTERM, shutdown_handler)
@@ -85,28 +82,62 @@ def find_executable(name):
             return p
     return None
 
-STREAMLINK = find_executable("streamlink")
+YTDLP = find_executable("yt-dlp")
 FFMPEG = find_executable("ffmpeg")
 
 # ============================================================
-# FFMPEG MANAGEMENT
+# DIRECT STREAM EXTRACTION (Android API Client Bypass)
 # ============================================================
 
-def start_ffmpeg():
+def get_direct_stream_url(youtube_url, cookie_file):
+    if not YTDLP:
+        log("[CRITICAL] yt-dlp executable not found!")
+        return None
+
+    log("[ENGINE] Extracting stream via Android Client API...")
+    cmd = [
+        YTDLP,
+        "-g",
+        "-f", "best[height<=720]/bestvideo[height<=720]+bestaudio/best",
+        "--extractor-args", "youtube:player_client=android,ios",
+        "--no-warnings",
+        "--no-playlist"
+    ]
+
+    if cookie_file:
+        cmd.extend(["--cookies", cookie_file])
+
+    cmd.append(youtube_url)
+
+    try:
+        res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=30)
+        if res.returncode == 0 and res.stdout.strip():
+            urls = res.stdout.strip().split("\n")
+            log("[ENGINE] Direct stream URL fetched successfully.")
+            return urls[0]
+        else:
+            log(f"[ERROR] yt-dlp extraction failed: {res.stderr.strip()}")
+    except Exception as e:
+        log(f"[ERROR] Exception during yt-dlp extraction: {e}")
+
+    return None
+
+# ============================================================
+# FFMPEG STREAMING PIPELINE
+# ============================================================
+
+def stream_video_with_ffmpeg(direct_url, index):
     global ffmpeg_process
-    if not FFMPEG:
-        log("[ERROR] FFmpeg executable not found!")
+    if shutdown_requested:
         return False
 
-    log("\n[SYSTEM] Initializing FFmpeg Process...")
-    log(f"[SYSTEM] Target Resolution: {TARGET_WIDTH}x{TARGET_HEIGHT} @ {TARGET_FPS}fps")
-    log("[SYSTEM] Target Destination: Restream RTMP")
+    log(f"[SYSTEM] Starting FFmpeg broadcast for Video #{index}...")
 
     command = [
         FFMPEG,
         "-loglevel", "warning",
         "-re",
-        "-i", "pipe:0",
+        "-i", direct_url,
         "-vf", f"scale={TARGET_WIDTH}:{TARGET_HEIGHT}:force_original_aspect_ratio=decrease,pad={TARGET_WIDTH}:{TARGET_HEIGHT}:(ow-iw)/2:(oh-ih)/2,fps={TARGET_FPS}",
         "-c:v", "libx264",
         "-preset", "ultrafast",
@@ -126,22 +157,38 @@ def start_ffmpeg():
     try:
         ffmpeg_process = subprocess.Popen(
             command,
-            stdin=subprocess.PIPE,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.PIPE,
-            bufsize=1024 * 1024
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1
         )
-        log("[SYSTEM] FFmpeg process running successfully.")
+
+        last_log_time = time.time()
+        while not shutdown_requested:
+            if ffmpeg_process.poll() is not None:
+                break
+            
+            line = ffmpeg_process.stdout.readline()
+            if not line and ffmpeg_process.poll() is not None:
+                break
+
+            if time.time() - last_log_time > 30:
+                log(f"[BROADCASTING] Video #{index} active and streaming to Restream...")
+                last_log_time = time.time()
+
+        ffmpeg_process.wait()
+        log(f"[PLAYLIST] Finished Video #{index}. Proceeding to next...")
         return True
     except Exception as e:
-        log(f"[ERROR] Failed to start FFmpeg: {e}")
+        log(f"[ERROR] FFmpeg process crashed: {e}")
         return False
+    finally:
+        stop_ffmpeg()
 
 def stop_ffmpeg():
     global ffmpeg_process
     if ffmpeg_process:
         try:
-            ffmpeg_process.stdin.close()
             ffmpeg_process.terminate()
             ffmpeg_process.wait(timeout=3)
         except Exception:
@@ -150,113 +197,6 @@ def stop_ffmpeg():
             except Exception:
                 pass
         ffmpeg_process = None
-
-def stop_streamlink():
-    global current_streamlink
-    if current_streamlink:
-        try:
-            current_streamlink.terminate()
-            current_streamlink.wait(timeout=3)
-        except Exception:
-            try:
-                current_streamlink.kill()
-            except Exception:
-                pass
-        current_streamlink = None
-
-# ============================================================
-# STREAMING LOGIC
-# ============================================================
-
-def stream_one_video(index, url, cookie_file):
-    global current_streamlink
-    if shutdown_requested:
-        return False
-
-    log("\n" + "=" * 60)
-    log(f"[PLAYLIST] Playing Video {index}/{len(VIDEOS)}")
-    log(f"[PLAYLIST] URL: {url}")
-    log("=" * 60)
-
-    cmd = [
-        STREAMLINK,
-        "--stdout",
-        "--loglevel", "info",
-        "--hls-live-edge", "3",
-        "--stream-segment-threads", "1",  # تقليل Threads لتجنب حظر Rate Limit
-        "--stream-timeout", "30",
-        "--retry-streams", "5",
-        "--retry-max", "3"
-    ]
-
-    if cookie_file:
-        cmd.extend(["--http-cookies-file", cookie_file])
-
-    # تمويه الطلب للحد من اكتشاف البوتات
-    cmd.extend([
-        "--http-header", 
-        "User-Agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-    ])
-
-    cmd.extend([url, "best,1080p,720p,worst"])
-
-    try:
-        current_streamlink = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            bufsize=1024 * 1024
-        )
-    except Exception as e:
-        log(f"[ERROR] Failed to launch Streamlink: {e}")
-        return False
-
-    def read_stderr():
-        try:
-            for line in iter(current_streamlink.stderr.readline, b""):
-                if shutdown_requested:
-                    break
-                msg = line.decode("utf-8", errors="ignore").strip()
-                if msg:
-                    log(f"[STREAMLINK] {msg}")
-        except Exception:
-            pass
-
-    threading.Thread(target=read_stderr, daemon=True).start()
-
-    bytes_sent = 0
-    last_log_time = time.time()
-
-    try:
-        while not shutdown_requested:
-            chunk = current_streamlink.stdout.read(64 * 1024)
-            if not chunk:
-                break
-
-            if not ffmpeg_process or ffmpeg_process.poll() is not None:
-                log("[ERROR] FFmpeg pipeline closed unexpectedly.")
-                return False
-
-            ffmpeg_process.stdin.write(chunk)
-            ffmpeg_process.stdin.flush()
-
-            bytes_sent += len(chunk)
-            if time.time() - last_log_time > 30:
-                mb_sent = round(bytes_sent / (1024 * 1024), 2)
-                log(f"[STREAMING...] Active -> Sent ~{mb_sent} MB to Restream")
-                last_log_time = time.time()
-
-    except BrokenPipeError:
-        log("[WARNING] Pipe broken, restarting stream pipeline...")
-        return False
-    except Exception as e:
-        log(f"[ERROR] Data routing error: {e}")
-        return False
-    finally:
-        stop_streamlink()
-
-    log(f"[PLAYLIST] Finished Video {index}. Proceeding to next...")
-    return True
 
 # ============================================================
 # MAIN LOOP
@@ -267,8 +207,8 @@ def main():
     log("   YouTube 24/7 Relay -> Restream -> TikTok")
     log("=" * 60)
 
-    if not STREAMLINK or not FFMPEG:
-        log("[CRITICAL] Missing dependencies! Ensure streamlink & ffmpeg are installed.")
+    if not FFMPEG or not YTDLP:
+        log("[CRITICAL] Missing dependencies! Ensure yt-dlp & ffmpeg are installed.")
         sys.exit(1)
 
     cookie_file = prepare_cookies()
@@ -277,27 +217,27 @@ def main():
     while not shutdown_requested:
         log(f"\n[SYSTEM] STARTING PLAYLIST CYCLE #{cycle}")
 
-        if not ffmpeg_process or ffmpeg_process.poll() is not None:
-            if not start_ffmpeg():
-                time.sleep(RECONNECT_DELAY)
-                continue
-
         for idx, video_url in enumerate(VIDEOS, start=1):
             if shutdown_requested:
                 break
 
-            success = stream_one_video(idx, video_url, cookie_file)
-            if not success and not shutdown_requested:
-                log(f"[WARNING] Problem or Rate Limit on video {idx}. Waiting {RECONNECT_DELAY}s before retrying...")
-                time.sleep(RECONNECT_DELAY)  # الانتظار بدلاً من التكرار الفوري لتفادي 429
+            log("\n" + "=" * 60)
+            log(f"[PLAYLIST] Playing Video {idx}/{len(VIDEOS)}")
+            log(f"[PLAYLIST] URL: {video_url}")
+            log("=" * 60)
 
-            # فترة انتظار بسيطة بين فيديو وآخر لتجنب الضغط المتتالي على يوتيوب
-            time.sleep(3)
+            direct_url = get_direct_stream_url(video_url, cookie_file)
+
+            if direct_url:
+                stream_video_with_ffmpeg(direct_url, idx)
+            else:
+                log(f"[WARNING] Skipping Video #{idx} due to URL extraction failure. Waiting {RECONNECT_DELAY}s...")
+                time.sleep(RECONNECT_DELAY)
+
+            time.sleep(2)
 
         cycle += 1
 
-    stop_streamlink()
-    stop_ffmpeg()
     log("[SYSTEM] Relay process terminated gracefully.")
 
 if __name__ == "__main__":
