@@ -21,23 +21,124 @@ def prepare_cookies():
     cookies_b64 = os.getenv("YOUTUBE_COOKIES_B64")
 
     if not cookies_b64:
-        log("[SYSTEM] YouTube cookies: OFF")
+        log("[COOKIES] OFF - YOUTUBE_COOKIES_B64 is not set.")
         return None
 
     try:
-        data = base64.b64decode(cookies_b64)
+        data = base64.b64decode(cookies_b64, validate=True)
+
         with open(COOKIES_FILE, "wb") as f:
             f.write(data)
 
-        log("[SYSTEM] YouTube cookies: ON")
+        size = len(data)
+        log(f"[COOKIES] File decoded successfully: {size} bytes")
+
+        with open(COOKIES_FILE, "rb") as f:
+            first_line = f.readline().decode("utf-8", errors="replace").strip()
+
+        if first_line not in (
+            "# HTTP Cookie File",
+            "# Netscape HTTP Cookie File",
+        ):
+            log("[COOKIES] ERROR: File is not Mozilla/Netscape cookies format.")
+            log(f"[COOKIES] First line received: {first_line[:120]}")
+            return None
+
+        log("[COOKIES] Format check: OK")
         return COOKIES_FILE
 
     except Exception as e:
-        log(f"[WARN] Could not prepare cookies: {e}")
+        log(f"[COOKIES] ERROR: Cannot decode/check cookies: {e}")
         return None
 
 
-def download_video():
+def check_runtime():
+    log("============================================================")
+    log("[SYSTEM] Runtime check")
+    log("============================================================")
+
+    try:
+        deno = subprocess.run(
+            ["deno", "--version"],
+            capture_output=True,
+            text=True,
+        )
+        log("[DENO]")
+        log(deno.stdout.strip() or deno.stderr.strip())
+    except Exception as e:
+        log(f"[DENO] ERROR: {e}")
+        return False
+
+    try:
+        ytdlp = subprocess.run(
+            ["yt-dlp", "--version"],
+            capture_output=True,
+            text=True,
+        )
+        log(f"[yt-dlp] {ytdlp.stdout.strip() or ytdlp.stderr.strip()}")
+    except Exception as e:
+        log(f"[yt-dlp] ERROR: {e}")
+        return False
+
+    return True
+
+
+def test_youtube_access(cookies):
+    log("============================================================")
+    log("[SYSTEM] Testing YouTube access before download")
+    log("============================================================")
+
+    command = [
+        "yt-dlp",
+        "--no-playlist",
+        "--simulate",
+        "--no-warnings",
+        "--js-runtimes",
+        "deno",
+        "--no-check-certificates",
+    ]
+
+    if cookies:
+        command.extend(["--cookies", cookies])
+
+    user_agent = os.getenv("YOUTUBE_USER_AGENT", "").strip()
+    if user_agent:
+        command.extend(["--user-agent", user_agent])
+        log("[TEST] Custom browser User-Agent: ON")
+    else:
+        log("[TEST] Custom browser User-Agent: OFF")
+
+    command.append(YOUTUBE_URL)
+
+    result = subprocess.run(
+        command,
+        capture_output=True,
+        text=True,
+    )
+
+    combined = (result.stdout + "\n" + result.stderr).strip()
+
+    if result.returncode == 0:
+        log("[TEST] YouTube extraction test: PASS")
+        return True
+
+    log("[TEST] YouTube extraction test: FAILED")
+    log("")
+    log(combined[-6000:])
+    log("")
+
+    if "Sign in to confirm you're not a bot" in combined:
+        if cookies:
+            log("[TEST] YouTube still rejected the request with the supplied cookies.")
+            log("[TEST] This can be caused by expired/invalid cookies, mismatched browser session/User-Agent,")
+            log("[TEST] or Railway's current IP being challenged by YouTube.")
+        else:
+            log("[TEST] YouTube is challenging the Railway request and no cookies were supplied.")
+
+    return False
+
+
+def download_video(cookies):
     if os.path.exists(VIDEO_FILE):
         try:
             if os.path.getsize(VIDEO_FILE) > 10 * 1024 * 1024:
@@ -56,8 +157,6 @@ def download_video():
     log("[SYSTEM] Downloading YouTube video")
     log("============================================================")
     log(f"[SOURCE] {YOUTUBE_URL}")
-
-    cookies = prepare_cookies()
 
     format_selector = (
         "bestvideo[height<=1080][fps<=60][vcodec^=avc1]+"
@@ -87,10 +186,16 @@ def download_video():
         "60",
         "--concurrent-fragments",
         "4",
+        "--js-runtimes",
+        "deno",
     ]
 
     if cookies:
         command.extend(["--cookies", cookies])
+
+    user_agent = os.getenv("YOUTUBE_USER_AGENT", "").strip()
+    if user_agent:
+        command.extend(["--user-agent", user_agent])
 
     command.append(YOUTUBE_URL)
 
@@ -100,7 +205,7 @@ def download_video():
     result = subprocess.run(command)
 
     if result.returncode != 0:
-        log("[ERROR] yt-dlp failed.")
+        log("[ERROR] yt-dlp download failed.")
         return False
 
     if not os.path.exists(VIDEO_FILE):
@@ -219,9 +324,25 @@ def start_stream():
 def main():
     log("============================================================")
     log(" YouTube -> Restream 24/7")
+    log(" Deno + yt-dlp cookies test")
     log("============================================================")
 
-    if not download_video():
+    if not check_runtime():
+        log("[FATAL] Runtime check failed.")
+        sys.exit(1)
+
+    cookies = prepare_cookies()
+
+    if os.getenv("YOUTUBE_COOKIES_B64") and not cookies:
+        log("[FATAL] YOUTUBE_COOKIES_B64 exists but the cookie file failed validation.")
+        sys.exit(1)
+
+    if not test_youtube_access(cookies):
+        log("[FATAL] YouTube access test failed. Download will NOT start.")
+        log("[FATAL] This prevents Railway from repeatedly crashing without a useful diagnosis.")
+        sys.exit(1)
+
+    if not download_video(cookies):
         log("[FATAL] Could not download YouTube video.")
         sys.exit(1)
 
