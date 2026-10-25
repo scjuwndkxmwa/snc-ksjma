@@ -9,9 +9,9 @@ import subprocess
 # CONFIG
 # ============================================================
 
-YOUTUBE_URL = "https://youtu.be/p2-fzkeqCjw"
+YOUTUBE_URL = "https://www.youtube.com/live/l9yvsDFsg94?si=YpGKvNGLIlZfHbF2"
 
-YOUTUBE_STREAM_KEY = "r77y-h37m-x6xr-x0dj-0g6q"
+YOUTUBE_STREAM_KEY = "70w6-cwe2-g22v-kz95-161h"
 
 YOUTUBE_RTMP = (
     "rtmp://a.rtmp.youtube.com/live2/"
@@ -732,114 +732,39 @@ def start_stream():
 
     log("[VIDEO] COPY")
     log("[AUDIO] AAC 128k / 44.1kHz / Stereo")
-    log("[LOOP] 24/7")
+    log("[LOOP] OFF — video will stream once")
 
     command = [
         "ffmpeg",
-
         "-hide_banner",
-
-        "-loglevel",
-        "warning",
-
-        # Real time
+        "-loglevel", "warning",
         "-re",
-
-        # Infinite loop
-        "-stream_loop",
-        "-1",
-
-        # Input
-        "-i",
-        VIDEO_FILE,
-
-        # Video
-        "-map",
-        "0:v:0",
-
-        "-c:v",
-        "copy",
-
-        # Audio
-        "-map",
-        "0:a:0?",
-
-        "-c:a",
-        "aac",
-
-        "-b:a",
-        "128k",
-
-        "-ar",
-        "44100",
-
-        "-ac",
-        "2",
-
-        # Timestamp
-        "-fflags",
-        "+genpts",
-
-        "-avoid_negative_ts",
-        "make_zero",
-
-        # RTMP
-        "-f",
-        "flv",
-
+        "-i", VIDEO_FILE,
+        "-map", "0:v:0",
+        "-c:v", "copy",
+        "-map", "0:a:0?",
+        "-c:a", "aac",
+        "-b:a", "128k",
+        "-ar", "44100",
+        "-ac", "2",
+        "-fflags", "+genpts",
+        "-avoid_negative_ts", "make_zero",
+        "-f", "flv",
         YOUTUBE_RTMP
     ]
 
-    while True:
-
-        process = None
-
-        try:
-
-            log(
-                "[SYSTEM] Connecting to YouTube..."
-            )
-
-            process = subprocess.Popen(
-                command
-            )
-
-            return_code = process.wait()
-
-            log(
-                "[SYSTEM] FFmpeg stopped."
-            )
-
-            log(
-                f"[SYSTEM] Exit code: {return_code}"
-            )
-
-        except KeyboardInterrupt:
-
-            log(
-                "[SYSTEM] Stopping..."
-            )
-
-            if process:
-
-                try:
-                    process.terminate()
-                except Exception:
-                    pass
-
-            break
-
-        except Exception as e:
-
-            log(
-                f"[ERROR] FFmpeg: {e}"
-            )
-
-        log(
-            "[SYSTEM] Reconnecting in 10 seconds..."
-        )
-
-        time.sleep(10)
+    try:
+        log("[SYSTEM] Connecting to YouTube...")
+        result = subprocess.run(command)
+        log(f"[SYSTEM] FFmpeg finished with exit code: {result.returncode}")
+        if result.returncode == 0:
+            log("[SUCCESS] Video finished. It will not replay automatically.")
+        else:
+            log("[ERROR] Stream stopped with an error. No automatic reconnect/replay.")
+            sys.exit(result.returncode)
+    except KeyboardInterrupt:
+        log("[SYSTEM] Stopped manually.")
+        sys.exit(130)
 
 
 # ============================================================
@@ -850,7 +775,7 @@ def main():
 
     log("")
     log("============================================================")
-    log(" YouTube Video -> YouTube LIVE 24/7")
+    log(" YouTube Video -> YouTube LIVE (ONE PLAY)")
     log(" Multi-client YouTube fallback")
     log(" Deno + yt-dlp + FFmpeg")
     log("============================================================")
