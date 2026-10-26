@@ -372,22 +372,3 @@ def test_youtube_access(cookies):
 
         result = subprocess.run(
             command,
-            capture_output=True,
-            text=True
-        )
-
-        combined = (
-            result.stdout
-            + "\n"
-            + result.stderr
-        ).strip()
-
-        if result.returncode == 0:
-
-            log(f"[SUCCESS] YouTube client works: {client}")
-
-            return client
-
-        log(f"[FAILED] Client {client}")
-
-        log
