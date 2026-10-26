@@ -9,7 +9,7 @@ import subprocess
 # CONFIG
 # ============================================================
 
-YOUTUBE_URL = "https://www.youtube.com/live/l9yvsDFsg94?si=YpGKvNGLIlZfHbF2"
+YOUTUBE_URL = "https://www.youtube.com/live/cJFeAw3pkek?si=_JAHZD_-haE6JgRo"
 
 YOUTUBE_STREAM_KEY = "70w6-cwe2-g22v-kz95-161h"
 
@@ -357,15 +357,6 @@ def test_youtube_access(cookies):
     log("[SYSTEM] Testing YouTube access")
     log("============================================================")
 
-    # --------------------------------------------------------
-    # IMPORTANT:
-    #
-    # Try several clients automatically.
-    #
-    # Some YouTube clients currently have different
-    # PO-token / SABR / bot-check requirements.
-    # --------------------------------------------------------
-
     clients = [
         "default",
         "web_safari",
@@ -423,7 +414,6 @@ def test_youtube_access(cookies):
             f"[FAILED] Client {client}"
         )
 
-        # Show useful error only
         log(
             combined[-2500:]
         )
@@ -445,8 +435,7 @@ def test_youtube_access(cookies):
     )
 
     log(
-        "============================================================"
-    )
+        "============================================================")
 
     return None
 
@@ -507,22 +496,10 @@ def download_video(
     )
 
     # --------------------------------------------------------
-    # Prefer H264 <=1080p <=60fps
+    # Best available quality
     # --------------------------------------------------------
 
-    format_selector = (
-        "bestvideo[height<=1080][fps<=60][vcodec^=avc1]+"
-        "bestaudio[ext=m4a]/"
-
-        "best[height<=1080][fps<=60][vcodec^=avc1]/"
-
-        "bestvideo[height<=1080][fps<=60]+"
-        "bestaudio/"
-
-        "best[height<=1080][fps<=60]/"
-
-        "best"
-    )
+    format_selector = "bestvideo+bestaudio/best"
 
     command = [
         "yt-dlp",
@@ -619,7 +596,7 @@ def download_video(
     )
 
     log(
-        "1080p / 60 FPS / H.264 when available"
+        "Highest available quality (bestvideo+bestaudio)"
     )
 
     log(
