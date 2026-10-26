@@ -9,7 +9,7 @@ import subprocess
 # CONFIG
 # ============================================================
 
-YOUTUBE_URL = "https://www.youtube.com/watch?v=cJFeAw3pkek"
+YOUTUBE_URL = "https://www.youtube.com/live/cJFeAw3pkek?si=_JAHZD_-haE6JgRo"
 
 YOUTUBE_STREAM_KEY = "70w6-cwe2-g22v-kz95-161h"
 
@@ -61,7 +61,6 @@ def prepare_cookies():
         with open(COOKIES_FILE, "rb") as f:
             lines = f.readlines()
 
-        # Count actual cookie lines
         cookie_lines = []
 
         for line in lines:
@@ -140,7 +139,6 @@ def check_runtime():
     log("[SYSTEM] Runtime check")
     log("============================================================")
 
-    # DENO
     try:
 
         result = subprocess.run(
@@ -166,7 +164,6 @@ def check_runtime():
 
         return False
 
-    # YT-DLP
     try:
 
         result = subprocess.run(
@@ -194,7 +191,6 @@ def check_runtime():
 
         return False
 
-    # FFMPEG
     try:
 
         result = subprocess.run(
@@ -263,10 +259,6 @@ def build_ytdlp_command(
         "60"
     ]
 
-    # --------------------------------------------------------
-    # CLIENT
-    # --------------------------------------------------------
-
     if client_mode == "default":
 
         log(
@@ -319,10 +311,6 @@ def build_ytdlp_command(
             "[CLIENT] web_embedded"
         )
 
-    # --------------------------------------------------------
-    # COOKIES
-    # --------------------------------------------------------
-
     if cookies:
 
         command.extend([
@@ -368,17 +356,9 @@ def test_youtube_access(cookies):
     for client in clients:
 
         log("")
-        log(
-            "------------------------------------------------------------"
-        )
-
-        log(
-            f"[TEST] Trying client: {client}"
-        )
-
-        log(
-            "------------------------------------------------------------"
-        )
+        log("------------------------------------------------------------")
+        log(f"[TEST] Trying client: {client}")
+        log("------------------------------------------------------------")
 
         command = build_ytdlp_command(
             cookies,
@@ -404,260 +384,10 @@ def test_youtube_access(cookies):
 
         if result.returncode == 0:
 
-            log(
-                f"[SUCCESS] YouTube client works: {client}"
-            )
+            log(f"[SUCCESS] YouTube client works: {client}")
 
             return client
 
-        log(
-            f"[FAILED] Client {client}"
-        )
+        log(f"[FAILED] Client {client}")
 
-        log(
-            combined[-2500:]
-        )
-
-        time.sleep(2)
-
-    log("")
-    log(
-        "============================================================"
-    )
-
-    log(
-        "[FATAL] All YouTube clients failed."
-    )
-
-    log(
-        "[FATAL] YouTube is currently blocking "
-        "this Railway request."
-    )
-
-    log(
-        "============================================================")
-
-    return None
-
-
-# ============================================================
-# DOWNLOAD
-# ============================================================
-
-def download_video(
-    cookies,
-    working_client
-):
-
-    # --------------------------------------------------------
-    # Existing video
-    # --------------------------------------------------------
-
-    if os.path.exists(VIDEO_FILE):
-
-        try:
-
-            size = os.path.getsize(
-                VIDEO_FILE
-            )
-
-            if size > 10 * 1024 * 1024:
-
-                log(
-                    "[SYSTEM] Existing video found."
-                )
-
-                log(
-                    f"[SYSTEM] "
-                    f"{size / 1024 / 1024:.2f} MB"
-                )
-
-                return True
-
-        except Exception:
-            pass
-
-    # Remove old file
-
-    try:
-
-        if os.path.exists(VIDEO_FILE):
-            os.remove(VIDEO_FILE)
-
-    except Exception:
-        pass
-
-    log("============================================================")
-    log("[SYSTEM] Downloading YouTube video")
-    log("============================================================")
-
-    log(
-        f"[SOURCE] {YOUTUBE_URL}"
-    )
-
-    # --------------------------------------------------------
-    # Quality restricted to 1080p or 720p only
-    # --------------------------------------------------------
-
-    format_selector = (
-        "bestvideo[height=1080]+bestaudio/best[height=1080]/"
-        "bestvideo[height=720]+bestaudio/best[height=720]"
-    )
-
-    command = [
-        "yt-dlp",
-
-        "--no-playlist",
-
-        "-f",
-        format_selector,
-
-        "--merge-output-format",
-        "mp4",
-
-        "-o",
-        VIDEO_FILE,
-
-        "--no-part",
-
-        "--retries",
-        "10",
-
-        "--fragment-retries",
-        "10",
-
-        "--extractor-retries",
-        "10",
-
-        "--socket-timeout",
-        "60",
-
-        "--concurrent-fragments",
-        "4",
-
-        "--js-runtimes",
-        "deno",
-
-        "--remote-components",
-        "ejs:npm",
-
-        "--no-check-certificates"
-    ]
-
-    # --------------------------------------------------------
-    # Same client that passed the test
-    # --------------------------------------------------------
-
-    if working_client == "web_safari":
-
-        command.extend([
-            "--extractor-args",
-            "youtube:player_client=default,web_safari",
-
-            "--extractor-args",
-            "youtube:webpage_client=web_safari"
-        ])
-
-    elif working_client == "android_vr":
-
-        command.extend([
-            "--extractor-args",
-            "youtube:player_client=android_vr"
-        ])
-
-    elif working_client == "tv":
-
-        command.extend([
-            "--extractor-args",
-            "youtube:player_client=tv"
-        ])
-
-    elif working_client == "web_embedded":
-
-        command.extend([
-            "--extractor-args",
-            "youtube:player_client=web_embedded"
-        ])
-
-    # --------------------------------------------------------
-    # Cookies
-    # --------------------------------------------------------
-
-    if cookies:
-
-        command.extend([
-            "--cookies",
-            cookies
-        ])
-
-    command.append(
-        YOUTUBE_URL
-    )
-
-    log(
-        "[SYSTEM] Target:"
-    )
-
-    log(
-        "Only 1080p or 720p resolution"
-    )
-
-    log(
-        f"[SYSTEM] Using client: {working_client}"
-    )
-
-    result = subprocess.run(
-        command
-    )
-
-    if result.returncode != 0:
-
-        log(
-            "[ERROR] yt-dlp download failed."
-        )
-
-        return False
-
-    if not os.path.exists(
-        VIDEO_FILE
-    ):
-
-        log(
-            "[ERROR] Video file not created."
-        )
-
-        return False
-
-    size = os.path.getsize(
-        VIDEO_FILE
-    )
-
-    if size < 10 * 1024 * 1024:
-
-        log(
-            "[ERROR] Video file too small."
-        )
-
-        return False
-
-    log(
-        "[SUCCESS] Download completed."
-    )
-
-    log(
-        f"[SIZE] "
-        f"{size / 1024 / 1024:.2f} MB"
-    )
-
-    return True
-
-
-# ============================================================
-# VIDEO INFO
-# ============================================================
-
-def show_video_info():
-
-    log("============================================================")
-    log("[SYSTEM] Video information")
-    log("==========================================================
+        log
