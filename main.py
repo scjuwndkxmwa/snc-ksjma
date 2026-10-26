@@ -9,7 +9,7 @@ import subprocess
 # CONFIG
 # ============================================================
 
-YOUTUBE_URL = "https://youtu.be/cJFeAw3pkek"
+YOUTUBE_URL = "https://www.youtube.com/watch?v=cJFeAw3pkek"
 
 YOUTUBE_STREAM_KEY = "70w6-cwe2-g22v-kz95-161h"
 
@@ -496,10 +496,13 @@ def download_video(
     )
 
     # --------------------------------------------------------
-    # Best available quality
+    # Quality restricted to 1080p or 720p only
     # --------------------------------------------------------
 
-    format_selector = "bestvideo+bestaudio/best"
+    format_selector = (
+        "bestvideo[height=1080]+bestaudio/best[height=1080]/"
+        "bestvideo[height=720]+bestaudio/best[height=720]"
+    )
 
     command = [
         "yt-dlp",
@@ -596,7 +599,7 @@ def download_video(
     )
 
     log(
-        "Highest available quality (bestvideo+bestaudio)"
+        "Only 1080p or 720p resolution"
     )
 
     log(
@@ -657,186 +660,4 @@ def show_video_info():
 
     log("============================================================")
     log("[SYSTEM] Video information")
-    log("============================================================")
-
-    command = [
-        "ffprobe",
-
-        "-v",
-        "error",
-
-        "-select_streams",
-        "v:0",
-
-        "-show_entries",
-        "stream=codec_name,width,height,r_frame_rate",
-
-        "-of",
-        "default=noprint_wrappers=1",
-
-        VIDEO_FILE
-    ]
-
-    try:
-
-        result = subprocess.run(
-            command,
-            capture_output=True,
-            text=True
-        )
-
-        log(
-            result.stdout.strip()
-            or result.stderr.strip()
-        )
-
-    except Exception as e:
-
-        log(
-            f"[FFPROBE] ERROR: {e}"
-        )
-
-
-# ============================================================
-# START STREAM
-# ============================================================
-
-def start_stream():
-
-    log("============================================================")
-    log("[SYSTEM] Starting YouTube LIVE")
-    log("============================================================")
-
-    log("[VIDEO] COPY")
-    log("[AUDIO] AAC 128k / 44.1kHz / Stereo")
-    log("[LOOP] OFF — video will stream once")
-
-    command = [
-        "ffmpeg",
-        "-hide_banner",
-        "-loglevel", "warning",
-        "-re",
-        "-i", VIDEO_FILE,
-        "-map", "0:v:0",
-        "-c:v", "copy",
-        "-map", "0:a:0?",
-        "-c:a", "aac",
-        "-b:a", "128k",
-        "-ar", "44100",
-        "-ac", "2",
-        "-fflags", "+genpts",
-        "-avoid_negative_ts", "make_zero",
-        "-f", "flv",
-        YOUTUBE_RTMP
-    ]
-
-    try:
-        log("[SYSTEM] Connecting to YouTube...")
-        result = subprocess.run(command)
-        log(f"[SYSTEM] FFmpeg finished with exit code: {result.returncode}")
-        if result.returncode == 0:
-            log("[SUCCESS] Video finished. It will not replay automatically.")
-        else:
-            log("[ERROR] Stream stopped with an error. No automatic reconnect/replay.")
-            sys.exit(result.returncode)
-    except KeyboardInterrupt:
-        log("[SYSTEM] Stopped manually.")
-        sys.exit(130)
-
-
-# ============================================================
-# MAIN
-# ============================================================
-
-def main():
-
-    log("")
-    log("============================================================")
-    log(" YouTube Video -> YouTube LIVE (ONE PLAY)")
-    log(" Multi-client YouTube fallback")
-    log(" Deno + yt-dlp + FFmpeg")
-    log("============================================================")
-
-    log(
-        f"[SOURCE] {YOUTUBE_URL}"
-    )
-
-    log(
-        "[OUTPUT] YouTube LIVE"
-    )
-
-    log(
-        "[VIDEO] COPY"
-    )
-
-    log(
-        "[AUDIO] AAC 128k / 44.1kHz / Stereo"
-    )
-
-    log(
-        "[LOOP] 24/7"
-    )
-
-    log("============================================================")
-
-    # Runtime
-
-    if not check_runtime():
-
-        log(
-            "[FATAL] Runtime check failed."
-        )
-
-        sys.exit(1)
-
-    # Cookies
-
-    cookies = prepare_cookies()
-
-    # Test
-
-    working_client = test_youtube_access(
-        cookies
-    )
-
-    if not working_client:
-
-        log("")
-        log(
-            "[FATAL] No YouTube client could access the video."
-        )
-
-        log(
-            "[FATAL] Nothing was downloaded."
-        )
-
-        sys.exit(1)
-
-    # Download
-
-    if not download_video(
-        cookies,
-        working_client
-    ):
-
-        log(
-            "[FATAL] Could not download video."
-        )
-
-        sys.exit(1)
-
-    # Info
-
-    show_video_info()
-
-    # Stream
-
-    start_stream()
-
-
-# ============================================================
-# START
-# ============================================================
-
-if __name__ == "__main__":
-    main()
+    log("==========================================================
