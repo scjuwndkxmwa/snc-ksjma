@@ -4,7 +4,6 @@ import time
 import base64
 import subprocess
 
-
 # ============================================================
 # CONFIG
 # ============================================================
@@ -15,6 +14,9 @@ YOUTUBE_RTMP = "rtmp://a.rtmp.youtube.com/live2/" + YOUTUBE_STREAM_KEY
 
 VIDEO_FILE = "/tmp/video.mp4"
 COOKIES_FILE = "/tmp/youtube_cookies.txt"
+
+SEP = "=" * 60
+DASH = "-" * 60
 
 
 # ============================================================
@@ -41,8 +43,7 @@ def prepare_cookies():
         with open(COOKIES_FILE, "wb") as f:
             f.write(data)
 
-        size = len(data)
-        log(f"[COOKIES] Decoded: {size} bytes")
+        log(f"[COOKIES] Decoded: {len(data)} bytes")
 
         with open(COOKIES_FILE, "rb") as f:
             lines = f.readlines()
@@ -78,28 +79,27 @@ def prepare_cookies():
 # ============================================================
 
 def check_runtime():
-    log("============================================================")
+    log(SEP)
     log("[SYSTEM] Runtime check")
-    log("============================================================")
+    log(SEP)
 
     try:
-        result = subprocess.run(["/usr/local/bin/deno", "--version"], capture_output=True, text=True)
-        log("[DENO]")
-        log(result.stdout.strip() or result.stderr.strip())
+        res = subprocess.run(["/usr/local/bin/deno", "--version"], capture_output=True, text=True)
+        log("[DENO] " + (res.stdout.strip() or res.stderr.strip()))
     except Exception as e:
         log(f"[DENO] ERROR: {e}")
         return False
 
     try:
-        result = subprocess.run(["yt-dlp", "--version"], capture_output=True, text=True)
-        log("[yt-dlp] " + (result.stdout.strip() or result.stderr.strip()))
+        res = subprocess.run(["yt-dlp", "--version"], capture_output=True, text=True)
+        log("[yt-dlp] " + (res.stdout.strip() or res.stderr.strip()))
     except Exception as e:
         log(f"[yt-dlp] ERROR: {e}")
         return False
 
     try:
-        result = subprocess.run(["ffmpeg", "-version"], capture_output=True, text=True)
-        first_line = result.stdout.strip().splitlines()[0] if result.stdout.strip() else result.stderr.strip()
+        res = subprocess.run(["ffmpeg", "-version"], capture_output=True, text=True)
+        first_line = res.stdout.strip().splitlines()[0] if res.stdout.strip() else res.stderr.strip()
         log("[FFmpeg] " + first_line)
     except Exception as e:
         log(f"[FFmpeg] ERROR: {e}")
@@ -158,17 +158,17 @@ def build_ytdlp_command(cookies, client_mode):
 # ============================================================
 
 def test_youtube_access(cookies):
-    log("============================================================")
+    log(SEP)
     log("[SYSTEM] Testing YouTube access")
-    log("============================================================")
+    log(SEP)
 
     clients = ["default", "web_safari", "android_vr", "tv", "web_embedded"]
 
     for client in clients:
         log("")
-        log("------------------------------------------------------------")
+        log(DASH)
         log(f"[TEST] Trying client: {client}")
-        log("------------------------------------------------------------")
+        log(DASH)
 
         command = build_ytdlp_command(cookies, client)
         command.insert(2, "--simulate")
@@ -185,10 +185,10 @@ def test_youtube_access(cookies):
         time.sleep(2)
 
     log("")
-    log("============================================================")
+    log(SEP)
     log("[FATAL] All YouTube clients failed.")
     log("[FATAL] YouTube is currently blocking this Railway request.")
-    log("============================================================")
+    log(SEP)
     return None
 
 
@@ -201,8 +201,7 @@ def download_video(cookies, working_client):
         try:
             size = os.path.getsize(VIDEO_FILE)
             if size > 10 * 1024 * 1024:
-                log("[SYSTEM] Existing video found.")
-                log(f"[SYSTEM] {size / 1024 / 1024:.2f} MB")
+                log(f"[SYSTEM] Existing video found: {size / 1024 / 1024:.2f} MB")
                 return True
         except Exception:
             pass
@@ -213,9 +212,9 @@ def download_video(cookies, working_client):
     except Exception:
         pass
 
-    log("============================================================")
+    log(SEP)
     log("[SYSTEM] Downloading YouTube video")
-    log("============================================================")
+    log(SEP)
     log(f"[SOURCE] {YOUTUBE_URL}")
 
     format_selector = (
@@ -275,8 +274,7 @@ def download_video(cookies, working_client):
         log("[ERROR] Video file too small.")
         return False
 
-    log("[SUCCESS] Download completed.")
-    log(f"[SIZE] {size / 1024 / 1024:.2f} MB")
+    log(f"[SUCCESS] Download completed. Size: {size / 1024 / 1024:.2f} MB")
     return True
 
 
@@ -285,9 +283,9 @@ def download_video(cookies, working_client):
 # ============================================================
 
 def show_video_info():
-    log("============================================================")
+    log(SEP)
     log("[SYSTEM] Video information")
-    log("============================================================")
+    log(SEP)
 
     command = [
         "ffprobe",
@@ -310,13 +308,13 @@ def show_video_info():
 # ============================================================
 
 def start_stream():
-    log("============================================================")
+    log(SEP)
     log("[SYSTEM] Starting YouTube LIVE (Single Play)")
-    log("============================================================")
+    log(SEP)
 
     log("[VIDEO] COPY")
     log("[AUDIO] AAC 128k / 44.1kHz / Stereo")
-    log("[LOOP] OFF — Video will stream ONLY ONCE")
+    log("[LOOP] OFF - Video will stream ONLY ONCE")
 
     command = [
         "ffmpeg",
@@ -362,8 +360,45 @@ def start_stream():
 
 def main():
     log("")
-    log("============================================================")
+    log(SEP)
     log(" YouTube Video -> YouTube LIVE (ONE PLAY - ACTIVE)")
     log(" Multi-client YouTube fallback")
     log(" Deno + yt-dlp + FFmpeg")
-    log("==========================================================
+    log(SEP)
+
+    log(f"[SOURCE] {YOUTUBE_URL}")
+    log("[OUTPUT] YouTube LIVE")
+    log("[VIDEO] COPY")
+    log("[AUDIO] AAC 128k / 44.1kHz / Stereo")
+    log("[LOOP] OFF")
+    log(SEP)
+
+    if not check_runtime():
+        log("[FATAL] Runtime check failed.")
+        sys.exit(1)
+
+    cookies = prepare_cookies()
+
+    working_client = test_youtube_access(cookies)
+
+    if not working_client:
+        log("")
+        log("[FATAL] No YouTube client could access the video.")
+        log("[FATAL] Nothing was downloaded.")
+        sys.exit(1)
+
+    if not download_video(cookies, working_client):
+        log("[FATAL] Could not download video.")
+        sys.exit(1)
+
+    show_video_info()
+
+    start_stream()
+
+
+# ============================================================
+# START
+# ============================================================
+
+if __name__ == "__main__":
+    main()
