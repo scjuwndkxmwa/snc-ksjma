@@ -9,7 +9,7 @@ import subprocess
 # CONFIG
 # ============================================================
 
-YOUTUBE_URL = "https://www.youtube.com/live/cJFeAw3pkek?si=_JAHZD_-haE6JgRo"
+YOUTUBE_URL = "https://youtu.be/cJFeAw3pkek"
 
 YOUTUBE_STREAM_KEY = "70w6-cwe2-g22v-kz95-161h"
 
