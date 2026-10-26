@@ -181,13 +181,12 @@ def test_youtube_access(cookies):
             return client
 
         log(f"[FAILED] Client {client}")
-        log(combined[-2500:])
+        log(combined[-1000:])
         time.sleep(2)
 
     log("")
     log(SEP)
     log("[FATAL] All YouTube clients failed.")
-    log("[FATAL] YouTube is currently blocking this Railway request.")
     log(SEP)
     return None
 
@@ -261,12 +260,8 @@ def download_video(cookies, working_client):
 
     result = subprocess.run(command)
 
-    if result.returncode != 0:
+    if result.returncode != 0 or not os.path.exists(VIDEO_FILE):
         log("[ERROR] yt-dlp download failed.")
-        return False
-
-    if not os.path.exists(VIDEO_FILE):
-        log("[ERROR] Video file not created.")
         return False
 
     size = os.path.getsize(VIDEO_FILE)
@@ -299,106 +294,3 @@ def show_video_info():
     try:
         result = subprocess.run(command, capture_output=True, text=True)
         log(result.stdout.strip() or result.stderr.strip())
-    except Exception as e:
-        log(f"[FFPROBE] ERROR: {e}")
-
-
-# ============================================================
-# START STREAM (SINGLE PLAY & STAY ACTIVE)
-# ============================================================
-
-def start_stream():
-    log(SEP)
-    log("[SYSTEM] Starting YouTube LIVE (Single Play)")
-    log(SEP)
-
-    log("[VIDEO] COPY")
-    log("[AUDIO] AAC 128k / 44.1kHz / Stereo")
-    log("[LOOP] OFF - Video will stream ONLY ONCE")
-
-    command = [
-        "ffmpeg",
-        "-hide_banner",
-        "-loglevel", "warning",
-        "-re",
-        "-i", VIDEO_FILE,
-        "-map", "0:v:0",
-        "-c:v", "copy",
-        "-map", "0:a:0?",
-        "-c:a", "aac",
-        "-b:a", "128k",
-        "-ar", "44100",
-        "-ac", "2",
-        "-fflags", "+genpts",
-        "-avoid_negative_ts", "make_zero",
-        "-f", "flv",
-        YOUTUBE_RTMP
-    ]
-
-    try:
-        log("[SYSTEM] Connecting to YouTube...")
-        result = subprocess.run(command)
-        log(f"[SYSTEM] FFmpeg finished with exit code: {result.returncode}")
-
-        if result.returncode == 0:
-            log("[SUCCESS] Video finished streaming once.")
-            log("[SYSTEM] Keeping process alive so Railway status remains ACTIVE...")
-            while True:
-                time.sleep(3600)
-        else:
-            log("[ERROR] Stream stopped with an error.")
-            sys.exit(result.returncode)
-
-    except KeyboardInterrupt:
-        log("[SYSTEM] Stopped manually.")
-        sys.exit(130)
-
-
-# ============================================================
-# MAIN
-# ============================================================
-
-def main():
-    log("")
-    log(SEP)
-    log(" YouTube Video -> YouTube LIVE (ONE PLAY - ACTIVE)")
-    log(" Multi-client YouTube fallback")
-    log(" Deno + yt-dlp + FFmpeg")
-    log(SEP)
-
-    log(f"[SOURCE] {YOUTUBE_URL}")
-    log("[OUTPUT] YouTube LIVE")
-    log("[VIDEO] COPY")
-    log("[AUDIO] AAC 128k / 44.1kHz / Stereo")
-    log("[LOOP] OFF")
-    log(SEP)
-
-    if not check_runtime():
-        log("[FATAL] Runtime check failed.")
-        sys.exit(1)
-
-    cookies = prepare_cookies()
-
-    working_client = test_youtube_access(cookies)
-
-    if not working_client:
-        log("")
-        log("[FATAL] No YouTube client could access the video.")
-        log("[FATAL] Nothing was downloaded.")
-        sys.exit(1)
-
-    if not download_video(cookies, working_client):
-        log("[FATAL] Could not download video.")
-        sys.exit(1)
-
-    show_video_info()
-
-    start_stream()
-
-
-# ============================================================
-# START
-# ============================================================
-
-if __name__ == "__main__":
-    main()
