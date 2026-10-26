@@ -11,7 +11,7 @@ YOUTUBE_URL = "https://www.youtube.com/live/cJFeAw3pkek"
 YOUTUBE_STREAM_KEY = "70w6-cwe2-g22v-kz95-161h"
 YOUTUBE_RTMP = "rtmp://a.rtmp.youtube.com/live2/" + YOUTUBE_STREAM_KEY
 
-LOOP = False  # True = يكرر الفيديو بدون توقف
+LOOP = False  # True = repeat the video forever
 
 VIDEO_FILE = "/tmp/video.mp4"
 COOKIES_FILE = "/tmp/youtube_cookies.txt"
@@ -83,6 +83,7 @@ def check_runtime():
     log(SEP)
     ok = run_version("yt-dlp", ["yt-dlp", "--version"])
     ok = run_version("FFmpeg", ["ffmpeg", "-version"]) and ok
+    # deno is optional: only needed for yt-dlp JS challenges
     run_version("DENO", ["deno", "--version"])
     return ok
 
@@ -138,25 +139,37 @@ def test_youtube_access(cookies):
     return None
 
 
+def video_short_side():
+    """Return the shorter side (720 = 720p) of the cached video, or 0."""
+    try:
+        r = subprocess.run(
+            ["ffprobe", "-v", "error", "-select_streams", "v:0",
+             "-show_entries", "stream=width,height", "-of", "csv=p=0:s=x", VIDEO_FILE],
+            capture_output=True, text=True)
+        w, h = r.stdout.strip().split("x")
+        return min(int(w), int(h))
+    except Exception:
+        return 0
+
+
 def download_video(cookies, client):
     if os.path.exists(VIDEO_FILE):
         size = os.path.getsize(VIDEO_FILE)
-        if size > 10 * 1024 * 1024:
-            log(f"[SYSTEM] Existing video found: {size / 1024 / 1024:.2f} MB")
+        side = video_short_side()
+        if size > 10 * 1024 * 1024 and side >= 720:
+            log(f"[SYSTEM] Existing video found: {size / 1024 / 1024:.2f} MB ({side}p)")
             return True
+        log(f"[SYSTEM] Removing cached video ({side}p), downloading 720p again")
         os.remove(VIDEO_FILE)
 
     log(SEP)
     log("[SYSTEM] Downloading video (max 720p, H.264 preferred)")
     log(SEP)
 
-    fmt = (
-        "bv*[height<=720][vcodec^=avc1]+ba[ext=m4a]/"
-        "bv*[height<=720]+ba/b[height<=720]/b"
-    )
-
     cmd = base_ytdlp(cookies, client) + [
-        "-f", fmt,
+        "-f", "bv*+ba/b",
+        # res = the SHORTER side, so 720 means 720p for landscape AND vertical videos
+        "-S", "res:720,vcodec:h264,acodec:aac",
         "--merge-output-format", "mp4",
         "-o", VIDEO_FILE,
         "--no-part",
@@ -216,9 +229,10 @@ def stream_video():
         cmd += ["-stream_loop", "-1"]
     cmd += [
         "-i", VIDEO_FILE,
+        # re-encode: YouTube RTMP/FLV needs H.264 + AAC (VP9 can't be copied)
         "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2,fps=30,format=yuv420p",
         "-c:v", "libx264", "-preset", "veryfast",
-        "-b:v", "2500k", "-maxrate", "2500k", "-bufsize", "5000k",
+        "-b:v", "4500k", "-maxrate", "4500k", "-bufsize", "9000k",
         "-g", "60", "-keyint_min", "60",
         "-c:a", "aac", "-b:a", "128k", "-ar", "44100", "-ac", "2",
         "-f", "flv", YOUTUBE_RTMP,
