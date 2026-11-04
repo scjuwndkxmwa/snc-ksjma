@@ -8,7 +8,7 @@ import subprocess
 # ============================================================
 
 YOUTUBE_URL = "https://www.youtube.com/watch?v=JtPjw--XYYw"
-YOUTUBE_STREAM_KEY = "0fy0-xbfb-dbjt-cym2-2pvc"
+YOUTUBE_STREAM_KEY = os.environ["0fy0-xbfb-dbjt-cym2-2pvc"]
 YOUTUBE_RTMP = "rtmp://a.rtmp.youtube.com/live2/" + YOUTUBE_STREAM_KEY
 
 LOOP = False  # True = repeat the video forever
@@ -152,6 +152,18 @@ def video_short_side():
         return 0
 
 
+def video_duration():
+    """Video duration in seconds, or 0 if probing fails."""
+    try:
+        r = subprocess.run(
+            ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+             "-of", "default=noprint_wrappers=1:nokey=1", VIDEO_FILE],
+            capture_output=True, text=True)
+        return float(r.stdout.strip())
+    except Exception:
+        return 0.0
+
+
 def download_video(cookies, client):
     if os.path.exists(VIDEO_FILE):
         size = os.path.getsize(VIDEO_FILE)
@@ -224,23 +236,43 @@ def stream_video():
     log(f"[SYSTEM] Starting YouTube LIVE (loop={'ON' if LOOP else 'OFF'})")
     log(SEP)
 
+    duration = video_duration()
+    log(f"[SYSTEM] Video duration: {duration:.1f}s")
+
     cmd = ["ffmpeg", "-hide_banner", "-loglevel", "warning", "-re"]
     if LOOP:
         cmd += ["-stream_loop", "-1"]
+    cmd += ["-i", VIDEO_FILE]
+
+    # No loop: cap the duration so ffmpeg exits right after the last frame
+    if not LOOP and duration > 0:
+        cmd += ["-t", f"{duration:.2f}"]
+
     cmd += [
-        "-i", VIDEO_FILE,
         # re-encode: YouTube RTMP/FLV needs H.264 + AAC (VP9 can't be copied)
         "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2,fps=30,format=yuv420p",
+        "-af", "aresample=async=1:first_pts=0",
         "-c:v", "libx264", "-preset", "veryfast",
         "-b:v", "4500k", "-maxrate", "4500k", "-bufsize", "9000k",
         "-g", "60", "-keyint_min", "60",
         "-c:a", "aac", "-b:a", "128k", "-ar", "44100", "-ac", "2",
+        "-shortest",
+        "-flvflags", "no_duration_filesize",
         "-f", "flv", YOUTUBE_RTMP,
     ]
 
-    result = subprocess.run(cmd)
-    log(f"[SYSTEM] FFmpeg exited with code {result.returncode}")
-    return result.returncode == 0
+    try:
+        # Safety timeout: duration + 60s, so a hung ffmpeg gets killed
+        timeout = None if LOOP or duration <= 0 else duration + 60
+        result = subprocess.run(cmd, timeout=timeout)
+        code = result.returncode
+    except subprocess.TimeoutExpired:
+        log("[SYSTEM] FFmpeg hung after end of video, killed by timeout.")
+        # The video already finished, so treat it as success
+        return not LOOP
+
+    log(f"[SYSTEM] FFmpeg exited with code {code}")
+    return code == 0
 
 
 # ============================================================
@@ -266,7 +298,10 @@ def main():
         ok = stream_video()
         if ok and not LOOP:
             log("[SYSTEM] Stream finished.")
-            return 0
+            # Keep the process alive so Railway doesn't restart the service
+            # and start the stream again.
+            while True:
+                time.sleep(3600)
         log("[SYSTEM] Stream stopped, retrying in 10s...")
         time.sleep(10)
 
