@@ -7,8 +7,8 @@ import subprocess
 # CONFIG
 # ============================================================
 
-YOUTUBE_URL = "https://www.youtube.com/live/cJFeAw3pkek"
-YOUTUBE_STREAM_KEY = "70w6-cwe2-g22v-kz95-161h"
+YOUTUBE_URL = "https://www.youtube.com/live/JtPjw--XYYw?si=2gN_P_A6CxC3XAc3"
+YOUTUBE_STREAM_KEY = "0fy0-xbfb-dbjt-cym2-2pvc"
 YOUTUBE_RTMP = "rtmp://a.rtmp.youtube.com/live2/" + YOUTUBE_STREAM_KEY
 
 LOOP = False  # True = repeat the video forever
