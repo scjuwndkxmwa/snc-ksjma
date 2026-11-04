@@ -8,7 +8,7 @@ import subprocess
 # ============================================================
 
 YOUTUBE_URL = "https://www.youtube.com/watch?v=JtPjw--XYYw"
-YOUTUBE_STREAM_KEY = os.environ["0fy0-xbfb-dbjt-cym2-2pvc"]
+YOUTUBE_STREAM_KEY = os.environ[0fy0-xbfb-dbjt-cym2-2pvc]
 YOUTUBE_RTMP = "rtmp://a.rtmp.youtube.com/live2/" + YOUTUBE_STREAM_KEY
 
 LOOP = False  # True = repeat the video forever
