@@ -16,6 +16,8 @@ LOOP = False  # True = repeat the video forever
 VIDEO_FILE = "/tmp/video.mp4"
 COOKIES_FILE = "/tmp/youtube_cookies.txt"
 
+DOWNLOAD_TIMEOUT = 1800  # max seconds for the download (live streams never end)
+
 SEP = "=" * 60
 DASH = "-" * 60
 
@@ -139,6 +141,22 @@ def test_youtube_access(cookies):
     return None
 
 
+def show_live_status(cookies, client):
+    """Print live_status: is_live / post_live / was_live / not_live."""
+    try:
+        cmd = base_ytdlp(cookies, client) + ["--print", "live_status", YOUTUBE_URL]
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+        status = r.stdout.strip().splitlines()
+        status = status[-1] if status else "unknown"
+        log(f"[SYSTEM] Source live_status: {status}")
+        if status in ("is_live", "post_live"):
+            log("[SYSTEM] Source is still a live stream; download will be time-limited.")
+        return status
+    except Exception as e:
+        log(f"[SYSTEM] Could not read live_status: {e}")
+        return "unknown"
+
+
 def video_short_side():
     """Return the shorter side (720 = 720p) of the cached video, or 0."""
     try:
@@ -168,11 +186,14 @@ def download_video(cookies, client):
     if os.path.exists(VIDEO_FILE):
         size = os.path.getsize(VIDEO_FILE)
         side = video_short_side()
-        if size > 10 * 1024 * 1024 and side >= 720:
+        # 480 so vertical 640x1280 videos are also accepted from cache
+        if size > 10 * 1024 * 1024 and side >= 480:
             log(f"[SYSTEM] Existing video found: {size / 1024 / 1024:.2f} MB ({side}p)")
             return True
-        log(f"[SYSTEM] Removing cached video ({side}p), downloading 720p again")
+        log(f"[SYSTEM] Removing cached video ({side}p), downloading again")
         os.remove(VIDEO_FILE)
+
+    show_live_status(cookies, client)
 
     log(SEP)
     log("[SYSTEM] Downloading video (max 720p, H.264 preferred)")
@@ -187,11 +208,18 @@ def download_video(cookies, client):
         "--no-part",
         "--fragment-retries", "10",
         "--concurrent-fragments", "4",
+        # ffmpeg gives up if the HLS playlist stops responding for 30s
+        "--downloader-args", "ffmpeg_i:-rw_timeout 30000000",
         YOUTUBE_URL,
     ]
 
-    result = subprocess.run(cmd)
-    if result.returncode != 0 or not os.path.exists(VIDEO_FILE):
+    try:
+        subprocess.run(cmd, timeout=DOWNLOAD_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        log("[SYSTEM] Download timed out (source live stream never closed). "
+            "Using whatever was downloaded.")
+
+    if not os.path.exists(VIDEO_FILE):
         log("[ERROR] yt-dlp download failed.")
         return False
 
