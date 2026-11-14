@@ -6,8 +6,8 @@ import time
 # ============================================================
 # CONFIG
 # ============================================================
-YOUTUBE_URL = "https://www.youtube.com/live/GD2vxposd-Y?si=qGM4oClfrpwJ61dh"
-YOUTUBE_STREAM_KEY = "vksy-du6k-8cxj-u7kh-7mfm"
+YOUTUBE_URL = "https://www.youtube.com/watch?v=aU-6QSFJNHA"
+YOUTUBE_STREAM_KEY = "qhr5-cqmm-z6rr-5p5v-785h"
 YOUTUBE_RTMP = "rtmp://a.rtmp.youtube.com/live2/" + YOUTUBE_STREAM_KEY
 LOOP = False  # True = repeat the video forever
 VIDEO_FILE = "/tmp/video.mp4"
