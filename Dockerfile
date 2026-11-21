@@ -1,37 +1,28 @@
-FROM python:3.12-slim
+FROM python:3.11-slim
 
+ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
-ENV PYTHONDONTWRITEBYTECODE=1
-ENV DENO_INSTALL=/usr/local
-ENV PATH="/usr/local/bin:${PATH}"
 
-WORKDIR /app
-
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends \
-        ffmpeg \
-        ca-certificates \
-        curl \
-        tini \
-        unzip \
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ffmpeg \
+    nodejs \
+    curl \
+    gnupg \
+    ca-certificates \
+    lsb-release \
+    proxychains4 \
+    && curl -fsSL https://pkg.cloudflareclient.com/pubkey.gpg | gpg --yes --dearmor --output /usr/share/keyrings/cloudflare-warp-archive-keyring.gpg \
+    && echo "deb [signed-by=/usr/share/keyrings/cloudflare-warp-archive-keyring.gpg] https://pkg.cloudflareclient.com/ $(lsb_release -cs) main" > /etc/apt/sources.list.d/cloudflare-client.list \
+    && apt-get update && apt-get install -y --no-install-recommends cloudflare-warp \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Deno in /usr/local/bin and VERIFY it during Docker build.
-RUN curl -fsSL https://deno.land/install.sh | DENO_INSTALL=/usr/local sh \
-    && /usr/local/bin/deno --version \
-    && test -x /usr/local/bin/deno
+# ضبط proxychains4 على بورت WARP المحلي
+RUN printf "strict_chain\nproxy_dns\n[ProxyList]\nsocks5 127.0.0.1 40000\n" > /etc/proxychains4.conf
 
+WORKDIR /app
 COPY requirements.txt .
-
-RUN pip install --no-cache-dir --upgrade pip \
-    && pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir -U pip && pip install --no-cache-dir -U -r requirements.txt
 
 COPY main.py .
-
-# Final runtime verification.
-RUN /usr/local/bin/deno --version \
-    && yt-dlp --version
-
-ENTRYPOINT ["/usr/bin/tini", "--"]
 
 CMD ["python", "-u", "main.py"]
