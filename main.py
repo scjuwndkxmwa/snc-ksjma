@@ -138,6 +138,8 @@ def base_ytdlp(cookies, client):
         "5",
         "--socket-timeout",
         "60",
+        "--sleep-requests",
+        "1.5",
     ]
     cmd += client_args(client)
     if cookies:
@@ -193,6 +195,21 @@ def video_short_side():
         return 0
 
 
+def classify_error(text):
+    """'rate_limit' / 'auth' errors hit EVERY client, so trying others only makes it worse."""
+    t = text.lower()
+    if "rate-limited" in t or "rate limited" in t:
+        return "rate_limit"
+    if "not a bot" in t or "sign in" in t or "--cookies" in t:
+        return "auth"
+    return None
+
+
+def error_line(text):
+    lines = [l for l in text.splitlines() if "ERROR" in l]
+    return (lines[-1] if lines else text.strip()[-300:])[:400]
+
+
 def short_side(f):
     """720 means 720p for BOTH landscape (1280x720) and vertical (720x1280) videos."""
     w, h = f.get("width") or 0, f.get("height") or 0
@@ -245,7 +262,11 @@ def choose_client_and_format(cookies):
         cmd = base_ytdlp(cookies, client) + ["-J", "--no-warnings", YOUTUBE_URL]
         res = subprocess.run(cmd, capture_output=True, text=True)
         if res.returncode != 0:
-            log(f"[FORMATS] client {client} failed: {res.stderr.strip()[-300:]}")
+            log(f"[FORMATS] client {client} failed: {error_line(res.stderr)}")
+            kind = classify_error(res.stderr)
+            if kind:
+                log(f"[FORMATS] Error type '{kind}' affects all clients - stopping the client loop.")
+                return None, None, kind
             continue
         try:
             info = json.loads(res.stdout)
@@ -257,9 +278,9 @@ def choose_client_and_format(cookies):
         picked = pick_formats(info)
         if picked:
             log(f"[FORMATS] USING client={client} format={picked[1]}")
-            return client, picked[0]
+            return client, picked[0], "ok"
         log(f"[FORMATS] {client}: nothing between {MIN_HEIGHT}p and {MAX_HEIGHT}p")
-    return None, None
+    return None, None, "no_hd"
 
 
 def download_video(cookies, client, fmt):
@@ -405,17 +426,28 @@ def main():
         return 1
     cookies = prepare_cookies()
 
-    client, fmt = choose_client_and_format(cookies)
-    if not client:
-        log("[FATAL] No client offers 720p-1080p. Not downloading low quality.")
-        return 1
+    # Never exit-and-restart on YouTube errors (a restart loop = more requests = longer ban).
+    waits = {"rate_limit": 65 * 60, "auth": 30 * 60, "no_hd": 15 * 60}
+    while True:
+        client, fmt, reason = choose_client_and_format(cookies)
+        if client:
+            break
+        wait = waits.get(reason, 15 * 60)
+        if reason == "rate_limit":
+            log("[WAIT] YouTube rate-limited this session. Waiting 65 min, then retrying.")
+        elif reason == "auth":
+            log("[WAIT] YouTube rejected the cookies/session (bot check). Export FRESH cookies "
+                "from a private window and update YOUTUBE_COOKIES_B64. Retrying in 30 min.")
+        else:
+            log(f"[WAIT] No {MIN_HEIGHT}p-{MAX_HEIGHT}p format found. Retrying in 15 min.")
+        time.sleep(wait)
 
     # retry the download (it resumes from the .part files when WORK_DIR is persistent)
     for attempt in range(1, 6):
         if download_video(cookies, client, fmt):
             break
-        log(f"[SYSTEM] Download attempt {attempt}/5 failed, retrying in 15s...")
-        time.sleep(15)
+        log(f"[SYSTEM] Download attempt {attempt}/5 failed, retrying in 60s...")
+        time.sleep(60)
     else:
         return 1
 
