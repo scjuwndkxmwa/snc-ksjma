@@ -1,4 +1,5 @@
 import base64
+import json
 import os
 import shutil
 import subprocess
@@ -192,7 +193,70 @@ def video_short_side():
         return 0
 
 
-def download_video(cookies, client):
+def pick_formats(info):
+    """Pick (format_selector, description) with height in [MIN_HEIGHT, MAX_HEIGHT], or None."""
+    fmts = info.get("formats") or []
+    vids = [
+        f for f in fmts
+        if f.get("vcodec") not in (None, "none")
+        and MIN_HEIGHT <= (f.get("height") or 0) <= MAX_HEIGHT
+    ]
+    if not vids:
+        return None
+
+    def vkey(f):
+        return (
+            f.get("height") or 0,
+            1 if str(f.get("vcodec", "")).startswith("avc1") else 0,
+            f.get("tbr") or 0,
+        )
+
+    v = max(vids, key=vkey)
+    if v.get("acodec") not in (None, "none"):
+        return v["format_id"], f"{v['format_id']} ({v.get('height')}p, muxed)"
+
+    auds = [
+        f for f in fmts
+        if f.get("acodec") not in (None, "none") and f.get("vcodec") in (None, "none")
+    ]
+    if not auds:
+        return v["format_id"], f"{v['format_id']} ({v.get('height')}p, no audio found)"
+    a = max(
+        auds,
+        key=lambda f: (1 if f.get("ext") == "m4a" else 0, f.get("abr") or f.get("tbr") or 0),
+    )
+    return (
+        f"{v['format_id']}+{a['format_id']}",
+        f"{v['format_id']} ({v.get('height')}p) + audio {a['format_id']}",
+    )
+
+
+def choose_client_and_format(cookies):
+    """Try every client until one offers a 720p-1080p format. Returns (client, selector)."""
+    for client in CLIENTS:
+        log(DASH)
+        log(f"[FORMATS] Checking client: {client}")
+        cmd = base_ytdlp(cookies, client) + ["-J", "--no-warnings", YOUTUBE_URL]
+        res = subprocess.run(cmd, capture_output=True, text=True)
+        if res.returncode != 0:
+            log(f"[FORMATS] client {client} failed: {res.stderr.strip()[-300:]}")
+            continue
+        try:
+            info = json.loads(res.stdout)
+        except Exception as e:
+            log(f"[FORMATS] bad JSON from {client}: {e}")
+            continue
+        heights = sorted({f.get("height") for f in info.get("formats", []) if f.get("height")})
+        log(f"[FORMATS] {client} heights available: {heights}")
+        picked = pick_formats(info)
+        if picked:
+            log(f"[FORMATS] USING client={client} format={picked[1]}")
+            return client, picked[0]
+        log(f"[FORMATS] {client}: nothing between {MIN_HEIGHT}p and {MAX_HEIGHT}p")
+    return None, None
+
+
+def download_video(cookies, client, fmt):
     if os.path.exists(VIDEO_FILE):
         size = os.path.getsize(VIDEO_FILE)
         side = video_short_side()
@@ -205,23 +269,12 @@ def download_video(cookies, client):
         os.remove(VIDEO_FILE)
 
     log(SEP)
-    log("[SYSTEM] Downloading video (max 720p, H.264 preferred)")
+    log("[SYSTEM] Downloading video (720p-1080p)")
     log(SEP)
 
-    h = MAX_HEIGHT
-    lo = MIN_HEIGHT
-    fmt = (
-        f"bv*[height<={h}][height>={lo}][vcodec^=avc1]+ba[ext=m4a]"
-        f"/bv*[height<={h}][height>={lo}]+ba"
-        f"/bv*[height<={h}]+ba"
-        f"/b[height<={h}]"
-    )
     cmd = base_ytdlp(cookies, client) + [
         "-f",
         fmt,
-        # between 720p and MAX_HEIGHT, prefer the highest, H.264 first
-        "-S",
-        f"res:{h},vcodec:h264,acodec:aac",
         "--merge-output-format",
         "mp4",
         "-o",
@@ -335,13 +388,14 @@ def main():
         return 1
     cookies = prepare_cookies()
 
-    client = test_youtube_access(cookies)
+    client, fmt = choose_client_and_format(cookies)
     if not client:
+        log("[FATAL] No client offers 720p-1080p. Not downloading low quality.")
         return 1
 
     # retry the download (it resumes from the .part files when WORK_DIR is persistent)
     for attempt in range(1, 6):
-        if download_video(cookies, client):
+        if download_video(cookies, client, fmt):
             break
         log(f"[SYSTEM] Download attempt {attempt}/5 failed, retrying in 15s...")
         time.sleep(15)
