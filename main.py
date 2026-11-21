@@ -1,5 +1,6 @@
 import base64
 import os
+import shutil
 import subprocess
 import time
 
@@ -10,8 +11,13 @@ YOUTUBE_URL = "https://www.youtube.com/live/dNcDvu-LOx4"
 YOUTUBE_STREAM_KEY = "50vb-qw3d-zvth-x1tg-acjw"
 YOUTUBE_RTMP = "rtmp://a.rtmp.youtube.com/live2/" + YOUTUBE_STREAM_KEY
 LOOP = False  # True = repeat the video forever
-VIDEO_FILE = "/tmp/video.mp4"
+# If you add a Railway Volume mounted at /data, the download survives restarts
+# and RESUMES instead of starting from 0 every time.
+WORK_DIR = "/data" if os.path.isdir("/data") and os.access("/data", os.W_OK) else "/tmp"
+VIDEO_FILE = os.path.join(WORK_DIR, "video.mp4")
 COOKIES_FILE = "/tmp/youtube_cookies.txt"
+MAX_HEIGHT = int(os.getenv("MAX_HEIGHT", "1080"))  # 1080 or 720
+MIN_HEIGHT = 720
 SEP = "=" * 60
 DASH = "-" * 60
 CLIENTS = ["default", "web_safari", "android_vr", "tv", "web_embedded"]
@@ -69,10 +75,28 @@ def run_version(name, cmd):
         return False
 
 
+def log_resources():
+    try:
+        du = shutil.disk_usage(WORK_DIR)
+        log(f"[RESOURCES] WORK_DIR={WORK_DIR} free={du.free / 1024**3:.2f} GiB of {du.total / 1024**3:.2f} GiB")
+    except Exception as e:
+        log(f"[RESOURCES] disk check error: {e}")
+    for p in ("/sys/fs/cgroup/memory.max", "/sys/fs/cgroup/memory/memory.limit_in_bytes"):
+        try:
+            v = open(p).read().strip()
+            if v.isdigit():
+                v = f"{int(v) / 1024**3:.2f} GiB"
+            log(f"[RESOURCES] memory limit: {v}")
+            break
+        except Exception:
+            pass
+
+
 def check_runtime():
     log(SEP)
     log("[SYSTEM] Runtime check")
     log(SEP)
+    log_resources()
     ok = run_version("yt-dlp", ["yt-dlp", "--version"])
     ok = (
         run_version("FFmpeg", ["ffmpeg", "-version"]) and ok
@@ -172,35 +196,44 @@ def download_video(cookies, client):
     if os.path.exists(VIDEO_FILE):
         size = os.path.getsize(VIDEO_FILE)
         side = video_short_side()
-        if size > 10 * 1024 * 1024 and side >= 720:
+        if size > 10 * 1024 * 1024 and side >= MIN_HEIGHT:
             log(
                 f"[SYSTEM] Existing video found: {size / 1024 / 1024:.2f} MB ({side}p)"
             )
             return True
-        log(
-            f"[SYSTEM] Removing cached video ({side}p), downloading 720p again"
-        )
+        log(f"[SYSTEM] Removing cached video ({side}p), downloading again")
         os.remove(VIDEO_FILE)
 
     log(SEP)
     log("[SYSTEM] Downloading video (max 720p, H.264 preferred)")
     log(SEP)
 
+    h = MAX_HEIGHT
+    lo = MIN_HEIGHT
+    fmt = (
+        f"bv*[height<={h}][height>={lo}][vcodec^=avc1]+ba[ext=m4a]"
+        f"/bv*[height<={h}][height>={lo}]+ba"
+        f"/bv*[height<={h}]+ba"
+        f"/b[height<={h}]"
+    )
     cmd = base_ytdlp(cookies, client) + [
         "-f",
-        "bv*+ba/b",
-        # res = the SHORTER side, so 720 means 720p for landscape AND vertical videos
+        fmt,
+        # between 720p and MAX_HEIGHT, prefer the highest, H.264 first
         "-S",
-        "res:720,vcodec:h264,acodec:aac",
+        f"res:{h},vcodec:h264,acodec:aac",
         "--merge-output-format",
         "mp4",
         "-o",
         VIDEO_FILE,
-        "--no-part",
+        "--continue",
         "--fragment-retries",
-        "10",
+        "20",
         "--concurrent-fragments",
-        "4",
+        "1",
+        "--newline",
+        "--progress-delta",
+        "15",
         YOUTUBE_URL,
     ]
 
@@ -306,7 +339,13 @@ def main():
     if not client:
         return 1
 
-    if not download_video(cookies, client):
+    # retry the download (it resumes from the .part files when WORK_DIR is persistent)
+    for attempt in range(1, 6):
+        if download_video(cookies, client):
+            break
+        log(f"[SYSTEM] Download attempt {attempt}/5 failed, retrying in 15s...")
+        time.sleep(15)
+    else:
         return 1
 
     show_video_info()
