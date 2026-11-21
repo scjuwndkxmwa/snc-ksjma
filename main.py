@@ -15,103 +15,119 @@ STREAM_KEY = "50vb-qw3d-zvth-x1tg-acjw"
 RTMP_SERVER = "rtmp://a.rtmp.youtube.com/live2"
 # ==========================================================
 
-WARP_PORT = "40000"
+SOCKS_PORT = "40000"
+HTTP_PORT = "40001"
+WGCF_DIR = "/tmp/wgcf"
+WIREPROXY_CONF = "/tmp/wireproxy.conf"
+WARP_ENDPOINTS = [
+    "162.159.192.1:2408",
+    "162.159.193.1:4500",
+    "162.159.195.1:500",
+]
+
 YT_CLIENT_SETS = [
     [],
     ["--extractor-args", "youtube:player_client=tv_downgraded,web_safari,mweb"],
     ["--extractor-args", "youtube:player_client=android_vr,visionos,ios"],
 ]
 
+_wireproxy_proc = None
+
 
 def log(msg):
     print(msg, flush=True)
 
 
-def prefer_ipv4():
-    """تفضيل IPv4 لتجنب أخطاء SOCKS5 IPv6 مع ffmpeg و proxychains."""
-    try:
-        with open("/etc/gai.conf", "a", encoding="utf-8") as f:
-            f.write("\nprecedence ::ffff:0:0/96  100\n")
-    except Exception:
-        pass
-
-
-def _warp(*args, timeout=30):
-    try:
-        r = subprocess.run(
-            ["warp-cli", "--accept-tos", *args],
-            capture_output=True, text=True, timeout=timeout,
-        )
-        return r.returncode == 0, (r.stdout + r.stderr).strip()
-    except Exception as e:
-        return False, str(e)
-
-
-def verify_warp_proxy(retries=6):
-    """التأكد من أن البروكسي يمرر الإنترنت فعلياً وليس مجرد متصل شكلياً."""
+def verify_warp_proxy(retries=5):
+    """التأكد من أن بروكسي WARP يمرر البيانات فعلياً."""
     for _ in range(retries):
         r = subprocess.run(
             [
                 "curl", "-4", "-s", "--max-time", "8",
-                "-x", f"socks5h://127.0.0.1:{WARP_PORT}",
+                "-x", f"socks5h://127.0.0.1:{SOCKS_PORT}",
                 "https://www.cloudflare.com/cdn-cgi/trace",
             ],
             capture_output=True, text=True,
         )
         if r.returncode == 0 and "warp=" in r.stdout:
-            ip_match = re.search(r"ip=([^\s]+)", r.stdout)
-            warp_ip = ip_match.group(1) if ip_match else "OK"
-            log(f"[WARP-Proxy] ✓ شغال ويمرر البيانات (IP: {warp_ip})")
+            ip_m = re.search(r"ip=([^\s]+)", r.stdout)
+            warp_ip = ip_m.group(1) if ip_m else "OK"
+            log(f"[WARP-Proxy] ✓ شغال بنجاح (IP: {warp_ip})")
             return True
-        time.sleep(2)
+        time.sleep(1.5)
     return False
 
 
-def configure_and_connect_warp():
-    if not _warp("registration", "new")[0]:
-        _warp("register")
-    if not _warp("mode", "proxy")[0]:
-        _warp("set-mode", "proxy")
-    if not _warp("proxy", "port", WARP_PORT)[0]:
-        _warp("set-proxy-port", WARP_PORT)
-    _warp("connect")
+def start_warp_proxy(force_new_account=True):
+    """تسجيل هوية Cloudflare WARP وتشغيل wireproxy كـ SOCKS5 + HTTP Proxy."""
+    global _wireproxy_proc
 
-    for _ in range(15):
-        if "Connected" in _warp("status")[1]:
-            break
-        time.sleep(1)
+    if _wireproxy_proc and _wireproxy_proc.poll() is None:
+        _wireproxy_proc.terminate()
+        _wireproxy_proc.wait(timeout=5)
 
-    if verify_warp_proxy(retries=5):
-        return True
+    os.makedirs(WGCF_DIR, exist_ok=True)
+    acc_file = os.path.join(WGCF_DIR, "wgcf-account.toml")
+    prof_file = os.path.join(WGCF_DIR, "wgcf-profile.conf")
 
-    # لو السيرفر بيحجب UDP WireGuard نحول لبروتوكول MASQUE تلقائياً
-    log("[WARP-Proxy] جاري التبديل إلى بروتوكول MASQUE...")
-    _warp("disconnect")
-    if not _warp("tunnel", "protocol", "set", "MASQUE")[0]:
-        _warp("set-tunnel-protocol", "MASQUE")
-    _warp("connect")
-    time.sleep(3)
-    return verify_warp_proxy(retries=6)
+    if force_new_account or not os.path.isfile(prof_file):
+        for f in (acc_file, prof_file):
+            if os.path.isfile(f):
+                os.remove(f)
 
+        registered = False
+        for i in range(4):
+            r = subprocess.run(["wgcf", "register", "--accept-tos"], cwd=WGCF_DIR, capture_output=True, text=True)
+            if r.returncode == 0:
+                registered = True
+                break
+            time.sleep(2 * (i + 1))
 
-def init_warp_daemon():
-    """تشغيل خدمة WARP في الخلفية وتفعيل وضع البروكسي."""
-    if not shutil.which("warp-svc") or not shutil.which("warp-cli"):
-        log("❌ أداة cloudflare-warp غير مثبتة في الحاوية.")
-        return False
-    subprocess.Popen(["warp-svc"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    time.sleep(3)
-    return configure_and_connect_warp()
+        if not registered:
+            log("⚠️ فشل تسجيل حساب wgcf، جاري إعادة المحاولة...")
+            return False
 
+        r = subprocess.run(["wgcf", "generate"], cwd=WGCF_DIR, capture_output=True, text=True)
+        if r.returncode != 0 or not os.path.isfile(prof_file):
+            log("⚠️ فشل توليد ملف إعدادات WARP.")
+            return False
 
-def rotate_warp_ip():
-    """تغيير هوية WARP للحصول على IP جديد عند الحظر."""
-    log("[WARP-Proxy] جاري تغيير الـ IP والحصول على هوية جديدة...")
-    _warp("disconnect")
-    if not _warp("registration", "delete")[0]:
-        _warp("delete")
-    time.sleep(2)
-    return configure_and_connect_warp()
+    with open(prof_file, encoding="utf-8") as f:
+        base_conf = f.read()
+
+    # تنظيف الإعدادات لتكون IPv4 فقط ومتوافقة مع wireproxy
+    cleaned_lines = []
+    for line in base_conf.splitlines():
+        if line.startswith("DNS ="):
+            continue
+        if line.startswith("Address =") and ":" in line:
+            continue
+        if line.startswith("AllowedIPs =") and ":" in line:
+            continue
+        cleaned_lines.append(line)
+    cleaned_base = "\n".join(cleaned_lines)
+
+    # تجربة بورتات Cloudflare WARP (2408 / 4500 / 500) لضمان الاتصال على Railway
+    for ep in WARP_ENDPOINTS:
+        conf_text = re.sub(r"Endpoint\s*=\s*.*", f"Endpoint = {ep}", cleaned_base)
+        conf_text += f"\n\n[Socks5]\nBindAddress = 127.0.0.1:{SOCKS_PORT}\n\n[http]\nBindAddress = 127.0.0.1:{HTTP_PORT}\n"
+        with open(WIREPROXY_CONF, "w", encoding="utf-8") as f:
+            f.write(conf_text)
+
+        if _wireproxy_proc and _wireproxy_proc.poll() is None:
+            _wireproxy_proc.terminate()
+            _wireproxy_proc.wait(timeout=5)
+
+        _wireproxy_proc = subprocess.Popen(
+            ["wireproxy", "-c", WIREPROXY_CONF],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        time.sleep(2)
+        if verify_warp_proxy(retries=4):
+            return True
+
+    return False
 
 
 def is_blocked(text):
@@ -127,7 +143,7 @@ def extract_stream_urls(url, client_idx):
     cmd = [
         "yt-dlp", "--ignore-config", "--no-playlist", "--no-warnings",
         "--force-ipv4",
-        "--proxy", f"socks5h://127.0.0.1:{WARP_PORT}",
+        "--proxy", f"socks5h://127.0.0.1:{SOCKS_PORT}",
         "-f", fmt, "-j",
         "--socket-timeout", "30", "--retries", "5",
     ]
@@ -159,16 +175,13 @@ def extract_stream_urls(url, client_idx):
 
 
 def relay_stream(stream_urls, headers, rtmp_target):
-    """نقل الفيديو بأعلى جودة زي ما هو (-c:v copy) عبر WARP Proxy إلى YouTube Live."""
+    """نقل الفيديو بأعلى جودة زي ما هو (-c:v copy) إلى YouTube Live."""
     hdr_str = "".join(f"{k}: {v}\r\n" for k, v in headers.items() if k.lower() != "host")
 
-    cmd = []
-    if shutil.which("proxychains4"):
-        cmd += ["proxychains4", "-q"]
-
-    cmd += ["ffmpeg", "-hide_banner", "-loglevel", "warning", "-stats"]
+    cmd = ["ffmpeg", "-hide_banner", "-loglevel", "warning", "-stats"]
 
     for u in stream_urls:
+        cmd += ["-http_proxy", f"http://127.0.0.1:{HTTP_PORT}"]
         if hdr_str:
             cmd += ["-headers", hdr_str]
         cmd += [
@@ -201,8 +214,6 @@ def relay_stream(stream_urls, headers, rtmp_target):
 
 
 if __name__ == "__main__":
-    prefer_ipv4()
-
     url = (os.environ.get("YOUTUBE_URL") or YOUTUBE_URL).strip()
     key = (os.environ.get("STREAM_KEY") or STREAM_KEY).strip()
     rtmp = (os.environ.get("RTMP_SERVER") or RTMP_SERVER).strip().rstrip("/")
@@ -216,7 +227,7 @@ if __name__ == "__main__":
 
     rtmp_target = f"{rtmp}/{key}"
 
-    while not init_warp_daemon():
+    while not start_warp_proxy(force_new_account=True):
         log("⚠️ تعذر تشغيل WARP Proxy، إعادة المحاولة بعد 5 ثوانٍ...")
         time.sleep(5)
 
@@ -228,7 +239,8 @@ if __name__ == "__main__":
         if not urls:
             log(f"⚠️ فشل الاستخراج عبر [WARP-Proxy]: {err[:160]}")
             if is_blocked(err) or "Connection refused" in err:
-                rotate_warp_ip()
+                log("[WARP-Proxy] جاري تغيير الـ IP والحصول على هوية جديدة...")
+                start_warp_proxy(force_new_account=True)
             client_idx += 1
             time.sleep(3)
             continue
