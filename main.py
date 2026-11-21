@@ -1,5 +1,5 @@
 import base64
-import json
+import glob
 import os
 import shutil
 import subprocess
@@ -8,67 +8,47 @@ import time
 # ============================================================
 # CONFIG
 # ============================================================
-YOUTUBE_URL = "https://www.youtube.com/live/dNcDvu-LOx4"
+YOUTUBE_URL = os.getenv("YOUTUBE_URL", "https://www.youtube.com/live/dNcDvu-LOx4")
 YOUTUBE_STREAM_KEY = "50vb-qw3d-zvth-x1tg-acjw"
 YOUTUBE_RTMP = "rtmp://a.rtmp.youtube.com/live2/" + YOUTUBE_STREAM_KEY
-LOOP = False  # True = repeat the video forever
-# If you add a Railway Volume mounted at /data, the download survives restarts
-# and RESUMES instead of starting from 0 every time.
+LOOP = os.getenv("LOOP", "0") == "1"
 WORK_DIR = "/data" if os.path.isdir("/data") and os.access("/data", os.W_OK) else "/tmp"
-VIDEO_FILE = os.path.join(WORK_DIR, "video.mp4")
+VIDEO_BASE = os.path.join(WORK_DIR, "video")  # final file: video.mp4
+VIDEO_FILE = VIDEO_BASE + ".mp4"
 COOKIES_FILE = "/tmp/youtube_cookies.txt"
-MAX_HEIGHT = int(os.getenv("MAX_HEIGHT", "1080"))  # 1080 or 720
-MIN_HEIGHT = 720
 SEP = "=" * 60
-DASH = "-" * 60
-CLIENTS = ["default", "web_safari", "android_vr", "tv", "web_embedded"]
+CLIENTS = ["default", "web_safari", "tv", "android_vr", "web_embedded"]
 
 
-def log(message):
-    print(message, flush=True)
+def log(m):
+    print(m, flush=True)
 
 
-# ============================================================
-# COOKIES
-# ============================================================
 def prepare_cookies():
-    cookies_b64 = os.getenv("YOUTUBE_COOKIES_B64")
-    if not cookies_b64:
+    b64 = os.getenv("YOUTUBE_COOKIES_B64")
+    if not b64:
         log("[COOKIES] OFF")
         return None
     try:
-        data = base64.b64decode(cookies_b64, validate=True)
+        data = base64.b64decode(b64)
+        text = data.decode("utf-8", errors="replace")
+        entries = [l for l in text.splitlines() if l.strip() and not l.startswith("#")]
+        if not entries:
+            log("[COOKIES] empty, continuing without")
+            return None
         with open(COOKIES_FILE, "wb") as f:
             f.write(data)
-        log(f"[COOKIES] Decoded: {len(data)} bytes")
-
-        lines = data.decode("utf-8", errors="replace").splitlines()
-        entries = [l for l in lines if l.strip() and not l.startswith("#")]
-        log(f"[COOKIES] Actual cookie entries: {len(entries)}")
-
-        if not entries:
-            log("[COOKIES] No cookies found. Continuing WITHOUT cookies.")
-            return None
-
-        first = lines[0].strip() if lines else ""
-        if first not in ("# HTTP Cookie File", "# Netscape HTTP Cookie File"):
-            log("[COOKIES] Invalid Netscape format.")
-            return None
-
-        log("[COOKIES] Format: OK")
+        log(f"[COOKIES] OK ({len(entries)} entries)")
         return COOKIES_FILE
     except Exception as e:
         log(f"[COOKIES] ERROR: {e}")
         return None
 
 
-# ============================================================
-# RUNTIME
-# ============================================================
-def run_version(name, cmd):
+def ver(name, cmd):
     try:
-        res = subprocess.run(cmd, capture_output=True, text=True)
-        out = (res.stdout.strip() or res.stderr.strip()).splitlines()
+        r = subprocess.run(cmd, capture_output=True, text=True)
+        out = (r.stdout.strip() or r.stderr.strip()).splitlines()
         log(f"[{name}] " + (out[0] if out else "ok"))
         return True
     except Exception as e:
@@ -76,47 +56,19 @@ def run_version(name, cmd):
         return False
 
 
-def log_resources():
-    try:
-        du = shutil.disk_usage(WORK_DIR)
-        log(f"[RESOURCES] WORK_DIR={WORK_DIR} free={du.free / 1024**3:.2f} GiB of {du.total / 1024**3:.2f} GiB")
-    except Exception as e:
-        log(f"[RESOURCES] disk check error: {e}")
-    for p in ("/sys/fs/cgroup/memory.max", "/sys/fs/cgroup/memory/memory.limit_in_bytes"):
-        try:
-            v = open(p).read().strip()
-            if v.isdigit():
-                v = f"{int(v) / 1024**3:.2f} GiB"
-            log(f"[RESOURCES] memory limit: {v}")
-            break
-        except Exception:
-            pass
-
-
 def check_runtime():
     log(SEP)
-    log("[SYSTEM] Runtime check")
-    log(SEP)
-    log_resources()
-    ok = run_version("yt-dlp", ["yt-dlp", "--version"])
-    ok = (
-        run_version("FFmpeg", ["ffmpeg", "-version"]) and ok
-    )  # deno is optional: only needed for yt-dlp JS challenges
-    run_version("DENO", ["deno", "--version"])
+    du = shutil.disk_usage(WORK_DIR)
+    log(f"[DISK] {WORK_DIR} free={du.free / 1024**3:.2f} GiB")
+    ok = ver("yt-dlp", ["yt-dlp", "--version"])
+    ok = ver("FFmpeg", ["ffmpeg", "-version"]) and ok
+    ver("DENO", ["deno", "--version"])
     return ok
 
 
-# ============================================================
-# YT-DLP
-# ============================================================
 def client_args(client):
     if client == "web_safari":
-        return [
-            "--extractor-args",
-            "youtube:player_client=default,web_safari",
-            "--extractor-args",
-            "youtube:webpage_client=web_safari",
-        ]
+        return ["--extractor-args", "youtube:player_client=default,web_safari"]
     if client in ("android_vr", "tv", "web_embedded"):
         return ["--extractor-args", f"youtube:player_client={client}"]
     return []
@@ -124,22 +76,10 @@ def client_args(client):
 
 def base_ytdlp(cookies, client):
     cmd = [
-        "yt-dlp",
-        "--no-playlist",
-        "--no-warnings",
-        "--js-runtimes",
-        "deno",
-        "--remote-components",
-        "ejs:npm",
-        "--no-check-certificates",
-        "--retries",
-        "5",
-        "--extractor-retries",
-        "5",
-        "--socket-timeout",
-        "60",
-        "--sleep-requests",
-        "1.5",
+        "yt-dlp", "--no-playlist", "--no-warnings",
+        "--js-runtimes", "deno", "--remote-components", "ejs:npm",
+        "--retries", "10", "--extractor-retries", "5",
+        "--socket-timeout", "60",
     ]
     cmd += client_args(client)
     if cookies:
@@ -147,187 +87,102 @@ def base_ytdlp(cookies, client):
     return cmd
 
 
-def video_short_side():
-    """Return the shorter side (720 = 720p) of the cached video, or 0."""
+def probe(path):
+    """Return (width, height, duration_seconds) or None."""
     try:
         r = subprocess.run(
-            [
-                "ffprobe",
-                "-v",
-                "error",
-                "-select_streams",
-                "v:0",
-                "-show_entries",
-                "stream=width,height",
-                "-of",
-                "csv=p=0:s=x",
-                VIDEO_FILE,
-            ],
-            capture_output=True,
-            text=True,
-        )
-        w, h = r.stdout.strip().split("x")
-        return min(int(w), int(h))
+            ["ffprobe", "-v", "error", "-select_streams", "v:0",
+             "-show_entries", "stream=width,height:format=duration",
+             "-of", "default=noprint_wrappers=1", path],
+            capture_output=True, text=True)
+        d = dict(l.split("=", 1) for l in r.stdout.split() if "=" in l)
+        return int(d["width"]), int(d["height"]), float(d.get("duration", 0) or 0)
     except Exception:
-        return 0
+        return None
+
+
+def cleanup_partials():
+    for f in glob.glob(VIDEO_BASE + ".*"):
+        if f != VIDEO_FILE:
+            os.remove(f)
 
 
 def download_video(cookies):
     if os.path.exists(VIDEO_FILE):
-        size = os.path.getsize(VIDEO_FILE)
-        side = video_short_side()
-        if size > 10 * 1024 * 1024 and side >= MIN_HEIGHT:
-            log(
-                f"[SYSTEM] Existing video found: {size / 1024 / 1024:.2f} MB ({side}p)"
-            )
+        p = probe(VIDEO_FILE)
+        if p and os.path.getsize(VIDEO_FILE) > 10 * 1024 * 1024 and p[2] > 0:
+            log(f"[SYSTEM] Using cached video {p[0]}x{p[1]} {p[2] / 60:.1f} min")
             return True
-        log(f"[SYSTEM] Removing cached video ({side}p), downloading again")
         os.remove(VIDEO_FILE)
 
     log(SEP)
-    log("[SYSTEM] Downloading video (720p-1080p)")
+    log("[SYSTEM] Downloading FULL video at 720p")
     log(SEP)
 
-    h = MAX_HEIGHT
-    cmd = base_ytdlp(cookies, "default") + [
-        "-f",
-        "bv*+ba/b",
-        # res = SHORTER side: 1080 = 1080x1920 (vertical) or 1920x1080 (landscape)
-        "-S",
-        f"res:{h},vcodec:h264,acodec:aac",
-        "--merge-output-format",
-        "mp4",
-        "-o",
-        VIDEO_FILE,
-        "--continue",
-        "--fragment-retries",
-        "20",
-        "--concurrent-fragments",
-        "1",
-        "--newline",
-        "--progress-delta",
-        "15",
-        YOUTUBE_URL,
-    ]
-
-    result = subprocess.run(cmd)
-    if result.returncode != 0 or not os.path.exists(VIDEO_FILE):
-        log("[ERROR] yt-dlp download failed.")
-        return False
-
-    size = os.path.getsize(VIDEO_FILE)
-    if size < 1024 * 1024:
-        log("[ERROR] Video file too small.")
-        return False
-
-    log(f"[SUCCESS] Downloaded {size / 1024 / 1024:.2f} MB")
-    return True
+    for client in CLIENTS:
+        log(f"[YT-DLP] client={client}")
+        cmd = base_ytdlp(cookies, client) + [
+            # 720p: res = SHORTER side, so 720x1280 (vertical) or 1280x720 both match
+            "-f", "bv*+ba/b",
+            "-S", "res:720,fps,vcodec:h264,acodec:aac",
+            "--live-from-start",       # if still live: from the beginning
+            "--merge-output-format", "mp4",
+            "-o", VIDEO_FILE, "--continue",
+            "--fragment-retries", "30",
+            "--concurrent-fragments", "4",
+            "--newline", "--progress-delta", "15",
+            YOUTUBE_URL,
+        ]
+        r = subprocess.run(cmd)
+        if r.returncode == 0 and os.path.exists(VIDEO_FILE):
+            p = probe(VIDEO_FILE)
+            if p and p[2] > 0:
+                log(f"[SUCCESS] {p[0]}x{p[1]}, {p[2] / 60:.1f} min, "
+                    f"{os.path.getsize(VIDEO_FILE) / 1024**2:.1f} MB")
+                return True
+        log(f"[YT-DLP] failed with {client}, trying next")
+        time.sleep(3)
+    cleanup_partials()
+    log("[ERROR] all clients failed")
+    return False
 
 
-# ============================================================
-# VIDEO INFO
-# ============================================================
-def show_video_info():
-    log(SEP)
-    log("[SYSTEM] Video information")
-    log(SEP)
-
-    cmd = [
-        "ffprobe",
-        "-v",
-        "error",
-        "-select_streams",
-        "v:0",
-        "-show_entries",
-        "stream=codec_name,width,height,r_frame_rate",
-        "-of",
-        "default=noprint_wrappers=1",
-        VIDEO_FILE,
-    ]
-    try:
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        log(result.stdout.strip() or result.stderr.strip())
-    except Exception as e:
-        log(f"[FFPROBE] ERROR: {e}")
-
-
-# ============================================================
-# STREAM
-# ============================================================
 def stream_video():
-    side = video_short_side()
-    if side >= 1000:
-        out_w, out_h, vbr = 1080, 1920, "6000k"
-    else:
-        out_w, out_h, vbr = 720, 1280, "4500k"
-    # always output PORTRAIT (vertical); a landscape source is letterboxed
-    vf = (
-        f"scale={out_w}:{out_h}:force_original_aspect_ratio=decrease,"
-        f"pad={out_w}:{out_h}:(ow-iw)/2:(oh-ih)/2:black,setsar=1,fps=30,format=yuv420p"
-    )
+    w, h, dur = probe(VIDEO_FILE) or (0, 0, 0)
+    # output 720p, keep orientation; letterbox if needed
+    out_w, out_h = (720, 1280) if h > w else (1280, 720)
+    vbr = "4500k"
+    ow, oh = out_w, out_h
+    vf = (f"scale={ow}:{oh}:force_original_aspect_ratio=decrease,"
+          f"pad={ow}:{oh}:(ow-iw)/2:(oh-ih)/2:black,setsar=1,fps=30,format=yuv420p")
     log(SEP)
-    log(f"[SYSTEM] Output: {out_w}x{out_h} portrait @ {vbr}")
-    log(f"[SYSTEM] Starting YouTube LIVE (loop={'ON' if LOOP else 'OFF'})")
+    log(f"[SYSTEM] Streaming {ow}x{oh} @ {vbr}, full length {dur / 60:.1f} min")
     log(SEP)
 
     cmd = ["ffmpeg", "-hide_banner", "-loglevel", "warning", "-re"]
     if LOOP:
         cmd += ["-stream_loop", "-1"]
+    bs = str(int(vbr[:-1]) * 2) + "k"
     cmd += [
-        "-i",
-        VIDEO_FILE,
-        # re-encode: YouTube RTMP/FLV needs H.264 + AAC (VP9 can't be copied)
-        "-vf",
-        vf,
-        "-c:v",
-        "libx264",
-        "-preset",
-        "veryfast",
-        "-b:v",
-        vbr,
-        "-maxrate",
-        vbr,
-        "-bufsize",
-        str(int(vbr[:-1]) * 2) + "k",
-        "-g",
-        "60",
-        "-keyint_min",
-        "60",
-        "-c:a",
-        "aac",
-        "-b:a",
-        "128k",
-        "-ar",
-        "44100",
-        "-ac",
-        "2",
-        "-f",
-        "flv",
-        YOUTUBE_RTMP,
+        "-i", VIDEO_FILE, "-vf", vf,
+        "-c:v", "libx264", "-preset", "veryfast",
+        "-b:v", vbr, "-maxrate", vbr, "-bufsize", bs,
+        "-g", "60", "-keyint_min", "60",
+        "-c:a", "aac", "-b:a", "128k", "-ar", "44100", "-ac", "2",
+        "-f", "flv", YOUTUBE_RTMP,
     ]
+    r = subprocess.run(cmd)
+    log(f"[SYSTEM] FFmpeg exited with code {r.returncode}")
+    return r.returncode == 0
 
-    result = subprocess.run(cmd)
-    log(f"[SYSTEM] FFmpeg exited with code {result.returncode}")
-    return result.returncode == 0
 
-
-# ============================================================
-# MAIN
-# ============================================================
 def main():
     if not check_runtime():
         return 1
-    cookies = prepare_cookies()
-
-    # one try: log in with the cookies, download, done
-    if not download_video(cookies):
+    if not download_video(prepare_cookies()):
         return 1
-
-    show_video_info()
-
     while True:
-        ok = stream_video()
-        if ok and not LOOP:
+        if stream_video() and not LOOP:
             log("[SYSTEM] Stream finished.")
             return 0
         log("[SYSTEM] Stream stopped, retrying in 10s...")
