@@ -10,8 +10,8 @@ import time
 # ==========================================================
 # ضع رابط الفيديو ومفتاح بث يوتيوب هنا مباشرة
 # ==========================================================
-YOUTUBE_URL = "https://www.youtube.com/watch?v=PUT_LINK_HERE"
-STREAM_KEY = "PUT_YOUTUBE_STREAM_KEY_HERE"
+YOUTUBE_URL = "https://www.youtube.com/live/dNcDvu-LOx4?si=5uhpaqDkpY1a8Rj0"
+STREAM_KEY = "50vb-qw3d-zvth-x1tg-acjw"
 RTMP_SERVER = "rtmp://a.rtmp.youtube.com/live2"
 # ==========================================================
 
