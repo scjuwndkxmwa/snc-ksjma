@@ -149,12 +149,10 @@ def download_video(cookies):
 
 def stream_video():
     w, h, dur = probe(VIDEO_FILE) or (0, 0, 0)
-    # output 720p, keep orientation; letterbox if needed
-    out_w, out_h = (720, 1280) if h > w else (1280, 720)
+    # keep the EXACT source dimensions: no scale, no pad, no crop
+    ow, oh = w, h
     vbr = "4500k"
-    ow, oh = out_w, out_h
-    vf = (f"scale={ow}:{oh}:force_original_aspect_ratio=decrease,"
-          f"pad={ow}:{oh}:(ow-iw)/2:(oh-ih)/2:black,setsar=1,fps=30,format=yuv420p")
+    vf = "setsar=1,fps=30,format=yuv420p"
     log(SEP)
     log(f"[SYSTEM] Streaming {ow}x{oh} @ {vbr}, full length {dur / 60:.1f} min")
     log(SEP)
