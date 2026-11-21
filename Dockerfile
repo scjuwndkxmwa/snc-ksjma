@@ -7,17 +7,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
     nodejs \
     curl \
-    gnupg \
     ca-certificates \
-    lsb-release \
-    proxychains4 \
-    && curl -fsSL https://pkg.cloudflareclient.com/pubkey.gpg | gpg --yes --dearmor --output /usr/share/keyrings/cloudflare-warp-archive-keyring.gpg \
-    && echo "deb [signed-by=/usr/share/keyrings/cloudflare-warp-archive-keyring.gpg] https://pkg.cloudflareclient.com/ $(lsb_release -cs) main" > /etc/apt/sources.list.d/cloudflare-client.list \
-    && apt-get update && apt-get install -y --no-install-recommends cloudflare-warp \
     && rm -rf /var/lib/apt/lists/*
 
-# ضبط proxychains4 على بورت WARP المحلي
-RUN printf "strict_chain\nproxy_dns\n[ProxyList]\nsocks5 127.0.0.1 40000\n" > /etc/proxychains4.conf
+# تثبيت wgcf و wireproxy (Userspace Cloudflare WARP Proxy بدون حاجة لصلاحيات كيرنل)
+RUN ARCH=$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/') \
+    && WGCF_TAG=$(curl -fsSLI -o /dev/null -w '%{url_effective}' https://github.com/ViRb3/wgcf/releases/latest | awk -F/ '{print $NF}') \
+    && curl -fsSL "https://github.com/ViRb3/wgcf/releases/download/${WGCF_TAG}/wgcf_${WGCF_TAG#v}_linux_${ARCH}" -o /usr/local/bin/wgcf \
+    && chmod +x /usr/local/bin/wgcf \
+    && curl -fsSL "https://github.com/pufferffish/wireproxy/releases/latest/download/wireproxy_linux_${ARCH}.tar.gz" -o /tmp/wireproxy.tar.gz \
+    && tar -xzf /tmp/wireproxy.tar.gz -C /usr/local/bin wireproxy \
+    && chmod +x /usr/local/bin/wireproxy \
+    && rm -f /tmp/wireproxy.tar.gz
 
 WORKDIR /app
 COPY requirements.txt .
