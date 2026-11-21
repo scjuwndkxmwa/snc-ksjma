@@ -193,41 +193,47 @@ def video_short_side():
         return 0
 
 
+def short_side(f):
+    """720 means 720p for BOTH landscape (1280x720) and vertical (720x1280) videos."""
+    w, h = f.get("width") or 0, f.get("height") or 0
+    return min(w, h) if w and h else h
+
+
 def pick_formats(info):
     """Pick (format_selector, description) with height in [MIN_HEIGHT, MAX_HEIGHT], or None."""
     fmts = info.get("formats") or []
     vids = [
         f for f in fmts
         if f.get("vcodec") not in (None, "none")
-        and MIN_HEIGHT <= (f.get("height") or 0) <= MAX_HEIGHT
+        and MIN_HEIGHT <= short_side(f) <= MAX_HEIGHT
     ]
     if not vids:
         return None
 
     def vkey(f):
         return (
-            f.get("height") or 0,
+            short_side(f),
             1 if str(f.get("vcodec", "")).startswith("avc1") else 0,
             f.get("tbr") or 0,
         )
 
     v = max(vids, key=vkey)
     if v.get("acodec") not in (None, "none"):
-        return v["format_id"], f"{v['format_id']} ({v.get('height')}p, muxed)"
+        return v["format_id"], f"{v['format_id']} ({short_side(v)}p, {v.get('width')}x{v.get('height')}, muxed)"
 
     auds = [
         f for f in fmts
         if f.get("acodec") not in (None, "none") and f.get("vcodec") in (None, "none")
     ]
     if not auds:
-        return v["format_id"], f"{v['format_id']} ({v.get('height')}p, no audio found)"
+        return v["format_id"], f"{v['format_id']} ({short_side(v)}p, no audio found)"
     a = max(
         auds,
         key=lambda f: (1 if f.get("ext") == "m4a" else 0, f.get("abr") or f.get("tbr") or 0),
     )
     return (
         f"{v['format_id']}+{a['format_id']}",
-        f"{v['format_id']} ({v.get('height')}p) + audio {a['format_id']}",
+        f"{v['format_id']} ({short_side(v)}p, {v.get('width')}x{v.get('height')}) + audio {a['format_id']}",
     )
 
 
@@ -246,8 +252,8 @@ def choose_client_and_format(cookies):
         except Exception as e:
             log(f"[FORMATS] bad JSON from {client}: {e}")
             continue
-        heights = sorted({f.get("height") for f in info.get("formats", []) if f.get("height")})
-        log(f"[FORMATS] {client} heights available: {heights}")
+        heights = sorted({short_side(f) for f in info.get("formats", []) if short_side(f)})
+        log(f"[FORMATS] {client} short-side qualities available: {heights}")
         picked = pick_formats(info)
         if picked:
             log(f"[FORMATS] USING client={client} format={picked[1]}")
@@ -335,7 +341,18 @@ def show_video_info():
 # STREAM
 # ============================================================
 def stream_video():
+    side = video_short_side()
+    if side >= 1000:
+        out_w, out_h, vbr = 1080, 1920, "6000k"
+    else:
+        out_w, out_h, vbr = 720, 1280, "4500k"
+    # always output PORTRAIT (vertical); a landscape source is letterboxed
+    vf = (
+        f"scale={out_w}:{out_h}:force_original_aspect_ratio=decrease,"
+        f"pad={out_w}:{out_h}:(ow-iw)/2:(oh-ih)/2:black,setsar=1,fps=30,format=yuv420p"
+    )
     log(SEP)
+    log(f"[SYSTEM] Output: {out_w}x{out_h} portrait @ {vbr}")
     log(f"[SYSTEM] Starting YouTube LIVE (loop={'ON' if LOOP else 'OFF'})")
     log(SEP)
 
@@ -347,17 +364,17 @@ def stream_video():
         VIDEO_FILE,
         # re-encode: YouTube RTMP/FLV needs H.264 + AAC (VP9 can't be copied)
         "-vf",
-        "scale=trunc(iw/2)*2:trunc(ih/2)*2,fps=30,format=yuv420p",
+        vf,
         "-c:v",
         "libx264",
         "-preset",
         "veryfast",
         "-b:v",
-        "4500k",
+        vbr,
         "-maxrate",
-        "4500k",
+        vbr,
         "-bufsize",
-        "9000k",
+        str(int(vbr[:-1]) * 2) + "k",
         "-g",
         "60",
         "-keyint_min",
