@@ -1,324 +1,195 @@
-import base64
+# -*- coding: utf-8 -*-
+import json
 import os
+import re
+import shutil
 import subprocess
+import sys
 import time
 
-# ============================================================
-# CONFIG
-# ============================================================
-YOUTUBE_URL = "https://www.youtube.com/watch?v=aU-6QSFJNHA"
-YOUTUBE_STREAM_KEY = "qhr5-cqmm-z6rr-5p5v-785h"
-YOUTUBE_RTMP = "rtmp://a.rtmp.youtube.com/live2/" + YOUTUBE_STREAM_KEY
-LOOP = False  # True = repeat the video forever
-VIDEO_FILE = "/tmp/video.mp4"
-COOKIES_FILE = "/tmp/youtube_cookies.txt"
-SEP = "=" * 60
-DASH = "-" * 60
-CLIENTS = ["default", "web_safari", "android_vr", "tv", "web_embedded"]
+# ==========================================================
+# ضع رابط الفيديو ومفتاح بث يوتيوب هنا مباشرة
+# ==========================================================
+YOUTUBE_URL = "https://www.youtube.com/watch?v=PUT_LINK_HERE"
+STREAM_KEY = "PUT_YOUTUBE_STREAM_KEY_HERE"
+RTMP_SERVER = "rtmp://a.rtmp.youtube.com/live2"
+# ==========================================================
+
+WARP_PORT = "40000"
+YT_CLIENT_SETS = [
+    [],
+    ["--extractor-args", "youtube:player_client=tv_downgraded,web_safari,mweb"],
+    ["--extractor-args", "youtube:player_client=android_vr,visionos,ios"],
+]
 
 
-def log(message):
-    print(message, flush=True)
+def log(msg):
+    print(msg, flush=True)
 
 
-# ============================================================
-# COOKIES
-# ============================================================
-def prepare_cookies():
-    cookies_b64 = os.getenv("YOUTUBE_COOKIES_B64")
-    if not cookies_b64:
-        log("[COOKIES] OFF")
-        return None
-    try:
-        data = base64.b64decode(cookies_b64, validate=True)
-        with open(COOKIES_FILE, "wb") as f:
-            f.write(data)
-        log(f"[COOKIES] Decoded: {len(data)} bytes")
-
-        lines = data.decode("utf-8", errors="replace").splitlines()
-        entries = [l for l in lines if l.strip() and not l.startswith("#")]
-        log(f"[COOKIES] Actual cookie entries: {len(entries)}")
-
-        if not entries:
-            log("[COOKIES] No cookies found. Continuing WITHOUT cookies.")
-            return None
-
-        first = lines[0].strip() if lines else ""
-        if first not in ("# HTTP Cookie File", "# Netscape HTTP Cookie File"):
-            log("[COOKIES] Invalid Netscape format.")
-            return None
-
-        log("[COOKIES] Format: OK")
-        return COOKIES_FILE
-    except Exception as e:
-        log(f"[COOKIES] ERROR: {e}")
-        return None
-
-
-# ============================================================
-# RUNTIME
-# ============================================================
-def run_version(name, cmd):
-    try:
-        res = subprocess.run(cmd, capture_output=True, text=True)
-        out = (res.stdout.strip() or res.stderr.strip()).splitlines()
-        log(f"[{name}] " + (out[0] if out else "ok"))
-        return True
-    except Exception as e:
-        log(f"[{name}] ERROR: {e}")
+def init_warp_daemon():
+    """تشغيل خدمة WARP في الخلفية وتفعيل وضع البروكسي."""
+    if not shutil.which("warp-svc") or not shutil.which("warp-cli"):
         return False
-
-
-def check_runtime():
-    log(SEP)
-    log("[SYSTEM] Runtime check")
-    log(SEP)
-    ok = run_version("yt-dlp", ["yt-dlp", "--version"])
-    ok = (
-        run_version("FFmpeg", ["ffmpeg", "-version"]) and ok
-    )  # deno is optional: only needed for yt-dlp JS challenges
-    run_version("DENO", ["deno", "--version"])
-    return ok
-
-
-# ============================================================
-# YT-DLP
-# ============================================================
-def client_args(client):
-    if client == "web_safari":
-        return [
-            "--extractor-args",
-            "youtube:player_client=default,web_safari",
-            "--extractor-args",
-            "youtube:webpage_client=web_safari",
-        ]
-    if client in ("android_vr", "tv", "web_embedded"):
-        return ["--extractor-args", f"youtube:player_client={client}"]
-    return []
-
-
-def base_ytdlp(cookies, client):
-    cmd = [
-        "yt-dlp",
-        "--no-playlist",
-        "--no-warnings",
-        "--js-runtimes",
-        "deno",
-        "--remote-components",
-        "ejs:npm",
-        "--no-check-certificates",
-        "--retries",
-        "5",
-        "--extractor-retries",
-        "5",
-        "--socket-timeout",
-        "60",
-    ]
-    cmd += client_args(client)
-    if cookies:
-        cmd += ["--cookies", cookies]
-    return cmd
-
-
-def test_youtube_access(cookies):
-    log(SEP)
-    log("[SYSTEM] Testing YouTube access")
-    log(SEP)
-
-    for client in CLIENTS:
-        log(DASH)
-        log(f"[TEST] Trying client: {client}")
-        cmd = base_ytdlp(cookies, client) + ["--simulate", YOUTUBE_URL]
-        result = subprocess.run(cmd, capture_output=True, text=True)
-
-        if result.returncode == 0:
-            log(f"[SUCCESS] Client works: {client}")
-            return client
-
-        log(f"[FAILED] Client {client}")
-        log((result.stdout + "\n" + result.stderr).strip()[-1000:])
-        time.sleep(2)
-
-    log("[FATAL] All YouTube clients failed.")
-    return None
-
-
-def video_short_side():
-    """Return the shorter side (720 = 720p) of the cached video, or 0."""
-    try:
-        r = subprocess.run(
-            [
-                "ffprobe",
-                "-v",
-                "error",
-                "-select_streams",
-                "v:0",
-                "-show_entries",
-                "stream=width,height",
-                "-of",
-                "csv=p=0:s=x",
-                VIDEO_FILE,
-            ],
-            capture_output=True,
-            text=True,
-        )
-        w, h = r.stdout.strip().split("x")
-        return min(int(w), int(h))
-    except Exception:
-        return 0
-
-
-def download_video(cookies, client):
-    if os.path.exists(VIDEO_FILE):
-        size = os.path.getsize(VIDEO_FILE)
-        side = video_short_side()
-        if size > 10 * 1024 * 1024 and side >= 720:
-            log(
-                f"[SYSTEM] Existing video found: {size / 1024 / 1024:.2f} MB ({side}p)"
-            )
+    subprocess.Popen(["warp-svc"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    time.sleep(3)
+    subprocess.run(["warp-cli", "--accept-tos", "registration", "new"], capture_output=True)
+    subprocess.run(["warp-cli", "--accept-tos", "mode", "proxy"], capture_output=True)
+    subprocess.run(["warp-cli", "--accept-tos", "proxy", "port", WARP_PORT], capture_output=True)
+    subprocess.run(["warp-cli", "--accept-tos", "connect"], capture_output=True)
+    for _ in range(15):
+        r = subprocess.run(["warp-cli", "--accept-tos", "status"], capture_output=True, text=True)
+        if "Connected" in (r.stdout + r.stderr):
+            log("[WARP] متصل وجاهز على بورت 40000")
             return True
-        log(
-            f"[SYSTEM] Removing cached video ({side}p), downloading 720p again"
-        )
-        os.remove(VIDEO_FILE)
+        time.sleep(1)
+    return False
 
-    log(SEP)
-    log("[SYSTEM] Downloading video (max 720p, H.264 preferred)")
-    log(SEP)
 
-    cmd = base_ytdlp(cookies, client) + [
-        "-f",
-        "bv*+ba/b",
-        # res = the SHORTER side, so 720 means 720p for landscape AND vertical videos
-        "-S",
-        "res:720,vcodec:h264,acodec:aac",
-        "--merge-output-format",
-        "mp4",
-        "-o",
-        VIDEO_FILE,
-        "--no-part",
-        "--fragment-retries",
-        "10",
-        "--concurrent-fragments",
-        "4",
-        YOUTUBE_URL,
-    ]
-
-    result = subprocess.run(cmd)
-    if result.returncode != 0 or not os.path.exists(VIDEO_FILE):
-        log("[ERROR] yt-dlp download failed.")
+def rotate_warp_ip():
+    """تغيير هوية WARP للحصول على IP جديد عند الحظر."""
+    if not shutil.which("warp-cli"):
         return False
-
-    size = os.path.getsize(VIDEO_FILE)
-    if size < 1024 * 1024:
-        log("[ERROR] Video file too small.")
-        return False
-
-    log(f"[SUCCESS] Downloaded {size / 1024 / 1024:.2f} MB")
+    log("[WARP] جاري تغيير الـ IP...")
+    subprocess.run(["warp-cli", "--accept-tos", "disconnect"], capture_output=True)
+    subprocess.run(["warp-cli", "--accept-tos", "registration", "delete"], capture_output=True)
+    time.sleep(2)
+    subprocess.run(["warp-cli", "--accept-tos", "registration", "new"], capture_output=True)
+    subprocess.run(["warp-cli", "--accept-tos", "mode", "proxy"], capture_output=True)
+    subprocess.run(["warp-cli", "--accept-tos", "proxy", "port", WARP_PORT], capture_output=True)
+    subprocess.run(["warp-cli", "--accept-tos", "connect"], capture_output=True)
+    time.sleep(4)
     return True
 
 
-# ============================================================
-# VIDEO INFO
-# ============================================================
-def show_video_info():
-    log(SEP)
-    log("[SYSTEM] Video information")
-    log(SEP)
+def is_blocked(text):
+    return bool(re.search(
+        r"confirm you.{0,3}re not a bot|HTTP Error 429|Too Many Requests|Sign in to confirm",
+        text or "", re.I,
+    ))
 
+
+def extract_stream_urls(url, use_proxy, client_idx):
+    """استخراج روابط البث المباشرة بأعلى جودة H.264 متوافقة مع YouTube RTMP بدون كوكيز."""
+    fmt = "bv*[vcodec^=avc1]+ba[acodec^=mp4a]/bv*[vcodec^=avc1]+ba/b[vcodec^=avc1]/bv*+ba/b"
     cmd = [
-        "ffprobe",
-        "-v",
-        "error",
-        "-select_streams",
-        "v:0",
-        "-show_entries",
-        "stream=codec_name,width,height,r_frame_rate",
-        "-of",
-        "default=noprint_wrappers=1",
-        VIDEO_FILE,
+        "yt-dlp", "--ignore-config", "--no-playlist", "--no-warnings",
+        "-f", fmt, "-j",
+        "--socket-timeout", "30", "--retries", "5",
     ]
-    try:
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        log(result.stdout.strip() or result.stderr.strip())
-    except Exception as e:
-        log(f"[FFPROBE] ERROR: {e}")
+    if shutil.which("node"):
+        cmd += ["--js-runtimes", "node"]
+    if use_proxy:
+        cmd += ["--proxy", f"socks5://127.0.0.1:{WARP_PORT}"]
+    cmd += YT_CLIENT_SETS[client_idx % len(YT_CLIENT_SETS)]
+    cmd += ["--", url]
+
+    r = subprocess.run(cmd, capture_output=True, text=True, timeout=90)
+    lines = (r.stdout + "\n" + r.stderr).splitlines()
+    for line in reversed(lines):
+        if line.startswith("{"):
+            try:
+                info = json.loads(line)
+                req_fmts = info.get("requested_formats")
+                if req_fmts and len(req_fmts) >= 2:
+                    v_url = req_fmts[0]["url"]
+                    a_url = req_fmts[1]["url"]
+                    headers = req_fmts[0].get("http_headers") or info.get("http_headers") or {}
+                    return [v_url, a_url], headers, info.get("title", ""), ""
+                elif info.get("url"):
+                    headers = info.get("http_headers") or {}
+                    return [info["url"]], headers, info.get("title", ""), ""
+            except Exception:
+                continue
+
+    errs = [s.strip() for s in lines if "ERROR" in s]
+    return None, {}, "", (" | ".join(errs[-2:]) or "فشل استخراج الروابط")
 
 
-# ============================================================
-# STREAM
-# ============================================================
-def stream_video():
-    log(SEP)
-    log(f"[SYSTEM] Starting YouTube LIVE (loop={'ON' if LOOP else 'OFF'})")
-    log(SEP)
+def relay_stream(stream_urls, headers, rtmp_target, use_proxy):
+    """نقل الفيديو بأعلى جودة زي ما هو (-c:v copy) إلى YouTube Live."""
+    hdr_str = "".join(f"{k}: {v}\r\n" for k, v in headers.items() if k.lower() != "host")
 
-    cmd = ["ffmpeg", "-hide_banner", "-loglevel", "warning", "-re"]
-    if LOOP:
-        cmd += ["-stream_loop", "-1"]
+    cmd = []
+    if use_proxy and shutil.which("proxychains4"):
+        cmd += ["proxychains4", "-q"]
+
+    cmd += ["ffmpeg", "-hide_banner", "-loglevel", "warning", "-stats"]
+
+    for u in stream_urls:
+        if hdr_str:
+            cmd += ["-headers", hdr_str]
+        cmd += [
+            "-reconnect", "1",
+            "-reconnect_streamed", "1",
+            "-reconnect_delay_max", "5",
+            "-re",
+            "-i", u,
+        ]
+
+    if len(stream_urls) >= 2:
+        cmd += ["-map", "0:v:0", "-map", "1:a:0"]
+    else:
+        cmd += ["-map", "0:v:0", "-map", "0:a:0"]
+
     cmd += [
-        "-i",
-        VIDEO_FILE,
-        # re-encode: YouTube RTMP/FLV needs H.264 + AAC (VP9 can't be copied)
-        "-vf",
-        "scale=trunc(iw/2)*2:trunc(ih/2)*2,fps=30,format=yuv420p",
-        "-c:v",
-        "libx264",
-        "-preset",
-        "veryfast",
-        "-b:v",
-        "4500k",
-        "-maxrate",
-        "4500k",
-        "-bufsize",
-        "9000k",
-        "-g",
-        "60",
-        "-keyint_min",
-        "60",
-        "-c:a",
-        "aac",
-        "-b:a",
-        "128k",
-        "-ar",
-        "44100",
-        "-ac",
-        "2",
-        "-f",
-        "flv",
-        YOUTUBE_RTMP,
+        "-c:v", "copy",
+        "-fps_mode", "passthrough",
+        "-c:a", "aac",
+        "-b:a", "128k",
+        "-ar", "44100",
+        "-ac", "2",
+        "-af", "aresample=async=1000",
+        "-f", "flv",
+        rtmp_target,
     ]
 
-    result = subprocess.run(cmd)
-    log(f"[SYSTEM] FFmpeg exited with code {result.returncode}")
-    return result.returncode == 0
-
-
-# ============================================================
-# MAIN
-# ============================================================
-def main():
-    if not check_runtime():
-        return 1
-    cookies = prepare_cookies()
-
-    client = test_youtube_access(cookies)
-    if not client:
-        return 1
-
-    if not download_video(cookies, client):
-        return 1
-
-    show_video_info()
-
-    while True:
-        ok = stream_video()
-        if ok and not LOOP:
-            log("[SYSTEM] Stream finished.")
-            return 0
-        log("[SYSTEM] Stream stopped, retrying in 10s...")
-        time.sleep(10)
+    proc = subprocess.run(cmd)
+    return proc.returncode
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    url = (os.environ.get("YOUTUBE_URL") or YOUTUBE_URL).strip()
+    key = (os.environ.get("STREAM_KEY") or STREAM_KEY).strip()
+    rtmp = (os.environ.get("RTMP_SERVER") or RTMP_SERVER).strip().rstrip("/")
+
+    if not url or "PUT_LINK_HERE" in url:
+        log("❌ ضع رابط اليوتيوب في YOUTUBE_URL أولاً.")
+        sys.exit(1)
+    if not key or "PUT_YOUTUBE_STREAM_KEY_HERE" in key:
+        log("❌ ضع مفتاح بث يوتيوب في STREAM_KEY أولاً.")
+        sys.exit(1)
+
+    rtmp_target = f"{rtmp}/{key}"
+    warp_ready = init_warp_daemon()
+
+    lanes = [False] + ([True] if warp_ready else [])  # False = direct, True = WARP proxy
+    attempt = 0
+
+    while True:
+        use_proxy = lanes[attempt % len(lanes)]
+        client_idx = attempt // len(lanes)
+        lane_name = "WARP-Proxy" if use_proxy else "Direct"
+
+        log(f"\n🔍 [{lane_name}] جاري سحب أعلى جودة للرابط (client_set={client_idx % len(YT_CLIENT_SETS)})...")
+        urls, headers, title, err = extract_stream_urls(url, use_proxy, client_idx)
+
+        if not urls:
+            log(f"⚠️ فشل الاستخراج عبر [{lane_name}]: {err[:160]}")
+            if use_proxy and is_blocked(err):
+                rotate_warp_ip()
+            attempt += 1
+            time.sleep(3)
+            continue
+
+        log(f"✅ العنوان: {title}")
+        log(f"🚀 بدأ النقل المباشر بأعلى جودة (Copy) إلى يوتيوب عبر [{lane_name}]...")
+        rc = relay_stream(urls, headers, rtmp_target, use_proxy)
+
+        if rc == 0:
+            log("✅ انتهى البث/الفيديو بشكل طبيعي.")
+            break
+
+        log(f"⚠️ توقف البث (كود {rc})، جاري إعادة الاتصال وتحديث الروابط...")
+        attempt += 1
+        time.sleep(3)
