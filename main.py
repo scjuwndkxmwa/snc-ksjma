@@ -147,29 +147,6 @@ def base_ytdlp(cookies, client):
     return cmd
 
 
-def test_youtube_access(cookies):
-    log(SEP)
-    log("[SYSTEM] Testing YouTube access")
-    log(SEP)
-
-    for client in CLIENTS:
-        log(DASH)
-        log(f"[TEST] Trying client: {client}")
-        cmd = base_ytdlp(cookies, client) + ["--simulate", YOUTUBE_URL]
-        result = subprocess.run(cmd, capture_output=True, text=True)
-
-        if result.returncode == 0:
-            log(f"[SUCCESS] Client works: {client}")
-            return client
-
-        log(f"[FAILED] Client {client}")
-        log((result.stdout + "\n" + result.stderr).strip()[-1000:])
-        time.sleep(2)
-
-    log("[FATAL] All YouTube clients failed.")
-    return None
-
-
 def video_short_side():
     """Return the shorter side (720 = 720p) of the cached video, or 0."""
     try:
@@ -195,95 +172,7 @@ def video_short_side():
         return 0
 
 
-def classify_error(text):
-    """'rate_limit' / 'auth' errors hit EVERY client, so trying others only makes it worse."""
-    t = text.lower()
-    if "rate-limited" in t or "rate limited" in t:
-        return "rate_limit"
-    if "not a bot" in t or "sign in" in t or "--cookies" in t:
-        return "auth"
-    return None
-
-
-def error_line(text):
-    lines = [l for l in text.splitlines() if "ERROR" in l]
-    return (lines[-1] if lines else text.strip()[-300:])[:400]
-
-
-def short_side(f):
-    """720 means 720p for BOTH landscape (1280x720) and vertical (720x1280) videos."""
-    w, h = f.get("width") or 0, f.get("height") or 0
-    return min(w, h) if w and h else h
-
-
-def pick_formats(info):
-    """Pick (format_selector, description) with height in [MIN_HEIGHT, MAX_HEIGHT], or None."""
-    fmts = info.get("formats") or []
-    vids = [
-        f for f in fmts
-        if f.get("vcodec") not in (None, "none")
-        and MIN_HEIGHT <= short_side(f) <= MAX_HEIGHT
-    ]
-    if not vids:
-        return None
-
-    def vkey(f):
-        return (
-            short_side(f),
-            1 if str(f.get("vcodec", "")).startswith("avc1") else 0,
-            f.get("tbr") or 0,
-        )
-
-    v = max(vids, key=vkey)
-    if v.get("acodec") not in (None, "none"):
-        return v["format_id"], f"{v['format_id']} ({short_side(v)}p, {v.get('width')}x{v.get('height')}, muxed)"
-
-    auds = [
-        f for f in fmts
-        if f.get("acodec") not in (None, "none") and f.get("vcodec") in (None, "none")
-    ]
-    if not auds:
-        return v["format_id"], f"{v['format_id']} ({short_side(v)}p, no audio found)"
-    a = max(
-        auds,
-        key=lambda f: (1 if f.get("ext") == "m4a" else 0, f.get("abr") or f.get("tbr") or 0),
-    )
-    return (
-        f"{v['format_id']}+{a['format_id']}",
-        f"{v['format_id']} ({short_side(v)}p, {v.get('width')}x{v.get('height')}) + audio {a['format_id']}",
-    )
-
-
-def choose_client_and_format(cookies):
-    """Try every client until one offers a 720p-1080p format. Returns (client, selector)."""
-    for client in CLIENTS:
-        log(DASH)
-        log(f"[FORMATS] Checking client: {client}")
-        cmd = base_ytdlp(cookies, client) + ["-J", "--no-warnings", YOUTUBE_URL]
-        res = subprocess.run(cmd, capture_output=True, text=True)
-        if res.returncode != 0:
-            log(f"[FORMATS] client {client} failed: {error_line(res.stderr)}")
-            kind = classify_error(res.stderr)
-            if kind:
-                log(f"[FORMATS] Error type '{kind}' affects all clients - stopping the client loop.")
-                return None, None, kind
-            continue
-        try:
-            info = json.loads(res.stdout)
-        except Exception as e:
-            log(f"[FORMATS] bad JSON from {client}: {e}")
-            continue
-        heights = sorted({short_side(f) for f in info.get("formats", []) if short_side(f)})
-        log(f"[FORMATS] {client} short-side qualities available: {heights}")
-        picked = pick_formats(info)
-        if picked:
-            log(f"[FORMATS] USING client={client} format={picked[1]}")
-            return client, picked[0], "ok"
-        log(f"[FORMATS] {client}: nothing between {MIN_HEIGHT}p and {MAX_HEIGHT}p")
-    return None, None, "no_hd"
-
-
-def download_video(cookies, client, fmt):
+def download_video(cookies):
     if os.path.exists(VIDEO_FILE):
         size = os.path.getsize(VIDEO_FILE)
         side = video_short_side()
@@ -299,9 +188,13 @@ def download_video(cookies, client, fmt):
     log("[SYSTEM] Downloading video (720p-1080p)")
     log(SEP)
 
-    cmd = base_ytdlp(cookies, client) + [
+    h = MAX_HEIGHT
+    cmd = base_ytdlp(cookies, "default") + [
         "-f",
-        fmt,
+        "bv*+ba/b",
+        # res = SHORTER side: 1080 = 1080x1920 (vertical) or 1920x1080 (landscape)
+        "-S",
+        f"res:{h},vcodec:h264,acodec:aac",
         "--merge-output-format",
         "mp4",
         "-o",
@@ -426,29 +319,8 @@ def main():
         return 1
     cookies = prepare_cookies()
 
-    # Never exit-and-restart on YouTube errors (a restart loop = more requests = longer ban).
-    waits = {"rate_limit": 65 * 60, "auth": 30 * 60, "no_hd": 15 * 60}
-    while True:
-        client, fmt, reason = choose_client_and_format(cookies)
-        if client:
-            break
-        wait = waits.get(reason, 15 * 60)
-        if reason == "rate_limit":
-            log("[WAIT] YouTube rate-limited this session. Waiting 65 min, then retrying.")
-        elif reason == "auth":
-            log("[WAIT] YouTube rejected the cookies/session (bot check). Export FRESH cookies "
-                "from a private window and update YOUTUBE_COOKIES_B64. Retrying in 30 min.")
-        else:
-            log(f"[WAIT] No {MIN_HEIGHT}p-{MAX_HEIGHT}p format found. Retrying in 15 min.")
-        time.sleep(wait)
-
-    # retry the download (it resumes from the .part files when WORK_DIR is persistent)
-    for attempt in range(1, 6):
-        if download_video(cookies, client, fmt):
-            break
-        log(f"[SYSTEM] Download attempt {attempt}/5 failed, retrying in 60s...")
-        time.sleep(60)
-    else:
+    # one try: log in with the cookies, download, done
+    if not download_video(cookies):
         return 1
 
     show_video_info()
