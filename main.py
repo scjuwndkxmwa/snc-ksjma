@@ -8,7 +8,7 @@ import time
 # ============================================================
 # CONFIG
 # ============================================================
-YOUTUBE_URL = os.getenv("YOUTUBE_URL", "https://www.youtube.com/live/dNcDvu-LOx4")
+YOUTUBE_URL = os.getenv("YOUTUBE_URL", "https://www.youtube.com/live/BPiG9t7E46I")
 YOUTUBE_STREAM_KEY = "50vb-qw3d-zvth-x1tg-acjw"
 YOUTUBE_RTMP = "rtmp://a.rtmp.youtube.com/live2/" + YOUTUBE_STREAM_KEY
 LOOP = os.getenv("LOOP", "0") == "1"
